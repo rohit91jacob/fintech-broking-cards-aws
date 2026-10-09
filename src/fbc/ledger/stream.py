@@ -86,7 +86,8 @@ def handler(event: dict[str, Any], context: Any, aws: Aws) -> dict[str, Any]:
                 for (seq, _), result in zip(chunk, resp["RequestResponses"], strict=True):
                     if result.get("ErrorCode"):
                         failed.add(seq)
-    return {"batchItemFailures": [{"itemIdentifier": seq} for seq in sorted(failed)]}
+    # Sequence numbers are decimal strings of varying length: order them numerically.
+    return {"batchItemFailures": [{"itemIdentifier": seq} for seq in sorted(failed, key=int)]}
 
 
 class StreamPoller:
@@ -151,8 +152,9 @@ class StreamPoller:
         if failures:
             if attempt >= 3:
                 raise RuntimeError(f"{len(failures)} records failed after retries")
-            first = min(failures)
-            retry = [r for r in records if r["dynamodb"]["SequenceNumber"] >= first]
+            # Like the Lambda event source mapping: resume from the lowest failed record.
+            first = min(int(f) for f in failures)
+            retry = [r for r in records if int(r["dynamodb"]["SequenceNumber"]) >= first]
             self.stats["retried_records"] += len(retry)
             self._invoke(retry, attempt + 1)
             return

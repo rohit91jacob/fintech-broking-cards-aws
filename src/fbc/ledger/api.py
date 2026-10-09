@@ -25,7 +25,7 @@ from decimal import Decimal
 from typing import Any
 
 from fbc.ledger.model import INR, Floor, Leg, Posting, Result, UnbalancedPosting, money
-from fbc.ledger.service import LedgerService
+from fbc.ledger.service import LedgerService, TransientLedgerError
 
 BROKERAGE_CAP = Decimal("20")
 BROKERAGE_RATE = Decimal("0.0003")
@@ -98,6 +98,9 @@ class LedgerApi:
             result = self.ledger.post(posting)
         except (BadRequest, UnbalancedPosting, json.JSONDecodeError) as exc:
             return _response(400, {"message": str(exc)})
+        except TransientLedgerError as exc:
+            # Nothing was written; the client retries with the same Idempotency-Key.
+            return _response(503, {"message": str(exc), "retryable": True})
         return _response(STATUS_CODES[result.status], _result_body(result))
 
     # ------------------------------------------------------------- builders

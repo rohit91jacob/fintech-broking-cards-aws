@@ -126,3 +126,32 @@ def test_balance_route(api):
 def test_brokerage_is_capped():
     assert brokerage(Decimal("10000")) == Decimal("3.00")
     assert brokerage(Decimal("1000000")) == Decimal("20.00")
+
+
+def test_transaction_conflict_is_retryable_not_a_rejection(api, ledger, monkeypatch):
+    """A TransactionConflict/throttle on real DynamoDB must not be stored as a rejection."""
+    ddb = ledger.aws.ddb
+    real = ddb.transact_write_items
+    error = ddb.exceptions.TransactionCanceledException(
+        {
+            "Error": {"Code": "TransactionCanceledException", "Message": "cancelled"},
+            "CancellationReasons": [{"Code": "None"}, {"Code": "TransactionConflict"}],
+        },
+        "TransactWriteItems",
+    )
+    calls = {"n": 0}
+
+    def flaky(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise error
+        return real(**kwargs)
+
+    monkeypatch.setattr(ddb, "transact_write_items", flaky)
+    code, body = deposit(api)
+    assert code == 503 and body["retryable"] is True
+    assert ledger.balance("CUST#C1:CASH", "INR") == Decimal(0)
+    # The retry with the same key is processed normally, not replayed as a rejection.
+    code, body = deposit(api)
+    assert code == 201 and body["status"] == "POSTED"
+    assert ledger.balance("CUST#C1:CASH", "INR") == Decimal("10000")

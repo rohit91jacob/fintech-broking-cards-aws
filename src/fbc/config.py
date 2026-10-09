@@ -9,6 +9,9 @@ from pathlib import Path
 
 def _env(name: str, default: str) -> str:
     value = os.environ.get(name, "").strip()
+    # The Makefile does `-include .env` + `export`, which keeps the quotes of KEY="a b".
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
     return value or default
 
 

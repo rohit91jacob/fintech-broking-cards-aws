@@ -55,6 +55,20 @@ def _reason_codes(exc: Exception) -> list[str]:
     return []
 
 
+# Cancellation codes that describe the request, not a transient condition. Anything else
+# (TransactionConflict, ThrottlingError, ProvisionedThroughputExceeded, ...) means nothing was
+# written and the same request can simply be retried with the same idempotency key.
+_DEFINITIVE_CODES = {"None", "ConditionalCheckFailed"}
+
+
+class TransientLedgerError(RuntimeError):
+    """The transaction was cancelled for a retryable reason; nothing was written."""
+
+    def __init__(self, codes: list[str]):
+        self.codes = codes
+        super().__init__(f"transaction cancelled, retry: {codes}")
+
+
 class LedgerService:
     def __init__(self, aws: Aws) -> None:
         self.aws = aws
@@ -83,6 +97,11 @@ class LedgerService:
             self.aws.ddb.transact_write_items(TransactItems=items)
         except self.aws.ddb.exceptions.TransactionCanceledException as exc:
             codes = _reason_codes(exc)
+            if any(code not in _DEFINITIVE_CODES for code in codes):
+                # Do NOT record a rejection for a conflict or throttle: that would turn a
+                # transient failure into a permanent answer for this idempotency key.
+                self.stats["transient"] += 1
+                raise TransientLedgerError(codes) from exc
             if codes and codes[0] == "ConditionalCheckFailed":
                 return self._replay(posting, request_hash)
             failed = [

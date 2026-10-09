@@ -89,3 +89,20 @@ def test_reconciliation_detects_a_lost_stream_record(aws, api, ledger, settings)
     checks = reconcile(ledger.scan_balances(), entries, iceberg.read(cat, "business_events"), {})
     broken = {c.name for c in checks if not c.ok}
     assert "stream_completeness" in broken
+
+
+def test_partial_batch_failure_resumes_from_lowest_failed_sequence_numerically():
+    """Sequence numbers are numeric strings; "9" must sort before "10"."""
+    from fbc.ledger.stream import StreamPoller
+
+    records = [{"dynamodb": {"SequenceNumber": s}} for s in ("9", "10", "11")]
+    calls: list[list[str]] = []
+
+    def fn(event, ctx):
+        calls.append([r["dynamodb"]["SequenceNumber"] for r in event["Records"]])
+        return {"batchItemFailures": [{"itemIdentifier": "10"}]} if len(calls) == 1 else {}
+
+    poller = StreamPoller(None, "arn:stream", fn)  # type: ignore[arg-type]
+    poller._invoke(records)
+    assert calls == [["9", "10", "11"], ["10", "11"]]
+    assert poller.stats["retried_records"] == 2
