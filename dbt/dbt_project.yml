@@ -1,0 +1,42 @@
+name: fbc
+version: "1.0.0"
+config-version: 2
+profile: fbc
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: target
+clean-targets: ["target", "logs"]
+
+# Iceberg sources are loaded by the dbt-duckdb plugin into schema "lake"; create it once up
+# front, otherwise parallel threads race on CREATE SCHEMA (DuckDB write-write conflict).
+on-run-start:
+  - "{% if target.type == 'duckdb' %}create schema if not exists lake{% endif %}"
+
+vars:
+  # Glue database holding the Iceberg tables when compiling for Athena.
+  lake_glue_database: fbc_dev_lake
+  # Velocity rule: this many card authorisations within the window raise an alert.
+  fraud_velocity_count: 4
+  fraud_velocity_minutes: 10
+  fraud_travel_minutes: 60
+  fraud_spike_multiple: 8
+  fraud_spike_min_inr: 20000
+
+models:
+  fbc:
+    +table_type: iceberg # Athena only; ignored by DuckDB
+    staging:
+      +schema: staging
+      +materialized: view
+    intermediate:
+      +schema: intermediate
+      +materialized: table
+    marts:
+      +schema: marts
+      +materialized: table
+
+data_tests:
+  fbc:
+    +store_failures: false

@@ -1,0 +1,37 @@
+version: 2
+
+sources:
+  - name: lake
+    description: >
+      Apache Iceberg tables written by the Python pipeline (raw_* = real public data,
+      sim_* / ledger_* / business_events = SIMULATED activity). Locally they are read through
+      the dbt-duckdb iceberg plugin; on Athena they are Glue tables.
+    schema: "{{ 'lake' if target.type == 'duckdb' else var('lake_glue_database') }}"
+    meta:
+      plugin: iceberg
+      iceberg_table: "lake.{identifier}"
+    tables:
+      - name: raw_sec_companyfacts
+        description: "REAL. SEC EDGAR XBRL companyfacts for Robinhood Markets (CIK 1783879), selected us-gaap concepts."
+      - name: raw_hood_revenue_by_type
+        description: "REAL. Revenues on srt:ProductOrServiceAxis plus net interest and total, from each 10-Q/10-K XBRL instance."
+      - name: raw_hood_kpis
+        description: "REAL. Key Performance Metrics table of each 10-Q/10-K (funded customers, platform assets, net deposits)."
+      - name: raw_nse_bhavcopy
+        description: "REAL. NSE capital-market bhavcopy (UDiFF), stock rows. Not redistributed."
+      - name: raw_rbi_psi
+        description: "REAL. RBI Payment System Indicators, long format (release, period, metric, measure)."
+      - name: raw_rbi_card_stats
+        description: "REAL. RBI bank-wise ATM, acceptance infrastructure and card statistics."
+      - name: business_events
+        description: "SIMULATED. One row per ledger request outcome (posted or rejected), via DynamoDB Streams -> Lambda -> Firehose."
+      - name: ledger_entries
+        description: "SIMULATED. One row per posted ledger leg, via DynamoDB Streams -> Lambda -> Firehose."
+      - name: ledger_balances_snapshot
+        description: "SIMULATED. Scan of the DynamoDB balances table at the end of the run."
+      - name: recon_results
+        description: "Output of the Python reconciliation job (DynamoDB vs Iceberg vs events)."
+      - name: sim_customers
+        description: "SIMULATED broking customers."
+      - name: sim_cards
+        description: "SIMULATED credit cards (issuer mix calibrated to RBI card statistics)."

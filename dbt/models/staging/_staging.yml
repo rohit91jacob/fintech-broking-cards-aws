@@ -1,0 +1,120 @@
+version: 2
+
+models:
+  - name: stg_nse_prices
+    description: REAL NSE end-of-day prices, EQ series only.
+    data_tests:
+      - dbt_utils_unique_combination:
+          arguments:
+            columns: [trade_date, symbol]
+    columns:
+      - name: trade_date
+        data_tests: [not_null]
+      - name: isin
+        data_tests: [not_null]
+      - name: close_price
+        data_tests: [not_null]
+
+  - name: stg_rbi_psi
+    description: REAL RBI Payment System Indicators, latest release per month.
+    data_tests:
+      - dbt_utils_unique_combination:
+          arguments:
+            columns: [period_month, metric, measure]
+    columns:
+      - name: value
+        data_tests: [not_null]
+      - name: measure
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [volume_lakh, value_crore, count_lakh]
+
+  - name: stg_rbi_card_stats
+    description: REAL RBI bank-wise card statistics, values in rupees.
+    data_tests:
+      - dbt_utils_unique_combination:
+          arguments:
+            columns: [period_month, bank_name]
+    columns:
+      - name: period_month
+        data_tests: [not_null]
+
+  - name: stg_hood_revenue
+    description: REAL Robinhood revenue by type per reporting period.
+    data_tests:
+      - dbt_utils_unique_combination:
+          arguments:
+            columns: [period_start, period_end, revenue_type]
+    columns:
+      - name: revenue_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [total, transaction_based, net_interest, other]
+
+  - name: stg_hood_kpis
+    description: REAL Robinhood key performance metrics per filing.
+    columns:
+      - name: period_end
+        data_tests: [unique, not_null]
+      - name: funded_customers_m
+        data_tests: [not_null]
+
+  - name: stg_ledger_entries
+    description: SIMULATED ledger legs from the DynamoDB stream.
+    data_tests:
+      - dbt_utils_unique_combination:
+          arguments:
+            columns: [txn_id, leg_no]
+    columns:
+      - name: amount
+        data_tests: [not_null]
+      - name: simulated
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true]
+
+  - name: stg_business_events
+    description: SIMULATED ledger request outcomes.
+    columns:
+      - name: txn_id
+        data_tests: [unique, not_null]
+      - name: status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [POSTED, REJECTED]
+      - name: txn_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [DEPOSIT, TRADE_BUY, TRADE_SELL, SETTLE_BUY, SETTLE_SELL, CARD_AUTH, CARD_PAYMENT]
+      - name: simulated
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true]
+
+  - name: stg_ledger_balances
+    description: SIMULATED DynamoDB balances at the end of the run.
+    data_tests:
+      - dbt_utils_unique_combination:
+          arguments:
+            columns: [account, unit]
+
+  - name: stg_recon_results
+    description: Reconciliation job output.
+
+  - name: stg_sim_cards
+    description: SIMULATED card master.
+    columns:
+      - name: card_id
+        data_tests: [unique, not_null]
+
+  - name: stg_sim_customers
+    description: SIMULATED broking customers.
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]

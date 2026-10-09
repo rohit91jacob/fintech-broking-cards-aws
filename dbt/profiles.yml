@@ -1,0 +1,35 @@
+fbc:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('FBC_DUCKDB_PATH', '../data/fbc.duckdb') }}"
+      threads: 4
+      plugins:
+        - module: iceberg
+          config:
+            catalog: fbc
+            type: sql
+            uri: "{{ env_var('FBC_CATALOG_URI', 'sqlite:///../data/catalog.db') }}"
+            warehouse: "{{ env_var('FBC_WAREHOUSE', '../data/warehouse') }}"
+    ci:
+      type: duckdb
+      path: "{{ env_var('FBC_DUCKDB_PATH', '../data/fbc_ci.duckdb') }}"
+      threads: 2
+      plugins:
+        - module: iceberg
+          config:
+            catalog: fbc
+            type: sql
+            uri: "{{ env_var('FBC_CATALOG_URI', 'sqlite:///../data/catalog.db') }}"
+            warehouse: "{{ env_var('FBC_WAREHOUSE', '../data/warehouse') }}"
+    # Compiled in CI (no AWS account is used). Names match infra/terraform.
+    athena:
+      type: athena
+      s3_staging_dir: "{{ env_var('FBC_ATHENA_STAGING_DIR', 's3://fbc-dev-athena-results/dbt/') }}"
+      s3_data_dir: "{{ env_var('FBC_ATHENA_DATA_DIR', 's3://fbc-dev-lake/marts/') }}"
+      region_name: "{{ env_var('FBC_AWS_REGION', 'ap-south-1') }}"
+      database: awsdatacatalog
+      schema: "{{ env_var('FBC_GLUE_DATABASE_PREFIX', 'fbc_dev') }}"
+      work_group: "{{ env_var('FBC_ATHENA_WORKGROUP', 'fbc-dev-analytics') }}"
+      threads: 4

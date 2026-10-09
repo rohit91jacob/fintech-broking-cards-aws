@@ -1,0 +1,96 @@
+version: 2
+
+models:
+  - name: int_trade_fills
+    description: SIMULATED posted trades with their settlement outcome.
+    columns:
+      - name: trade_txn_id
+        data_tests: [unique, not_null]
+      - name: side
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [BUY, SELL]
+
+  - name: int_trading_days
+    description: REAL NSE sessions in the simulated window, with the next session.
+    columns:
+      - name: trade_date
+        data_tests: [unique, not_null]
+
+  - name: fct_positions_mtm
+    description: SIMULATED positions per customer/ISIN/session marked to market at REAL closes.
+    data_tests:
+      - dbt_utils_unique_combination:
+          arguments:
+            columns: [as_of_date, customer_id, isin]
+    columns:
+      - name: quantity
+        description: Shares held at the session close (settled + pending). Never negative.
+      - name: market_value
+        data_tests: [not_null]
+      - name: close_price
+        data_tests: [not_null]
+
+  - name: mart_daily_pnl
+    description: SIMULATED daily and cumulative P&L per customer.
+    data_tests:
+      - dbt_utils_unique_combination:
+          arguments:
+            columns: [as_of_date, customer_id]
+
+  - name: mart_settlement_cash
+    description: SIMULATED T+1 settlement obligations per trade date.
+    columns:
+      - name: trade_date
+        data_tests: [unique, not_null]
+      - name: settlement_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [SETTLED, PENDING, PARTIAL]
+
+  - name: mart_upi_growth_monthly
+    description: REAL UPI monthly volume (million) and value (INR crore) with MoM / YoY growth.
+    columns:
+      - name: period_month
+        data_tests: [unique, not_null]
+      - name: volume_mn
+        data_tests: [not_null]
+
+  - name: mart_credit_card_spend_per_card
+    description: REAL credit-card spend per card by bank and month.
+    data_tests:
+      - dbt_utils_unique_combination:
+          arguments:
+            columns: [period_month, bank_name]
+
+  - name: mart_robinhood_kpis
+    description: REAL Robinhood quarterly KPIs and revenue by type (Q4 derived from 10-K full year).
+    columns:
+      - name: period_end
+        data_tests: [unique, not_null]
+
+  - name: mart_ledger_reconciliation
+    description: Reconciliation report; every row must be OK.
+    columns:
+      - name: status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [OK]
+
+  - name: fct_card_fraud_alerts
+    description: SIMULATED card authorisations with rule flags.
+    columns:
+      - name: txn_id
+        data_tests: [unique, not_null]
+
+  - name: mart_fraud_rule_performance
+    description: SIMULATED precision/recall per fraud rule against injected labels.
+    columns:
+      - name: rule_name
+        data_tests: [unique]
+
+  - name: mart_sim_card_spend_vs_rbi
+    description: SIMULATED card spend per card per day vs the REAL RBI average it was calibrated on.
