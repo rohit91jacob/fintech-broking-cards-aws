@@ -1,0 +1,7 @@
+project            = "fbc"
+environment        = "dev"
+region             = "ap-south-1"
+monthly_budget_usd = 25
+alert_email        = "you@example.com"
+# github_repository           = "rohit91jacob/fintech-broking-cards-aws"
+# create_github_oidc_provider = true
