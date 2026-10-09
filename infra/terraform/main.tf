@@ -93,5 +93,7 @@ module "ci_oidc" {
   create_provider     = var.create_github_oidc_provider
   account_id          = data.aws_caller_identity.current.account_id
   partition           = data.aws_partition.current.partition
+  project_tag         = local.tags.Project
+  tf_state_bucket     = var.tf_state_bucket
   state_resource_arns = [module.lake.lake_bucket_arn]
 }

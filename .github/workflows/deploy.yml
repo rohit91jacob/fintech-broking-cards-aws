@@ -71,6 +71,8 @@ jobs:
         run: uv run --no-project python scripts/build_lambda_zip.py
       - name: terraform init (S3 backend with native locking)
         working-directory: infra/terraform
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
         run: |
           cat > backend_override.tf <<'EOF'
           terraform {
@@ -78,14 +80,18 @@ jobs:
           }
           EOF
           terraform init -input=false \
-            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
             -backend-config="key=fintech-broking-cards-aws/dev.tfstate" \
             -backend-config="region=${AWS_REGION}" \
             -backend-config="encrypt=true" \
             -backend-config="use_lockfile=true"
       - name: terraform plan
         working-directory: infra/terraform
-        run: terraform plan -input=false -out=tfplan -var="region=${AWS_REGION}" -var="alert_email=${{ vars.ALERT_EMAIL }}"
+        env:
+          TF_VAR_alert_email: ${{ vars.ALERT_EMAIL }}
+          TF_VAR_tf_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+          TF_VAR_github_repository: ${{ github.repository }}
+        run: terraform plan -input=false -out=tfplan -var="region=${AWS_REGION}"
       - name: terraform apply
         if: inputs.apply
         working-directory: infra/terraform

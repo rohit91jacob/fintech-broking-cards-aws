@@ -61,7 +61,7 @@ and Card Statistics* (summed over banks by the RBI's own Total row) and the syst
 
 | Month | Credit cards outstanding, card statistics | PSI Part III (lakh x 10^5) | Match |
 |---|---|---|---|
-| Aug 2026 | 124,053,544 | 124,054,000 (1,240.54 lakh) | yes |
+| Aug 2026 | 124,053,544 | 124,053,544 (1,240.53544 lakh) | yes |
 | Dec 2025 - Jul 2026 (8 months) | e.g. Jul 2026: 122,857,894 | 122,857,894 | yes, all 8 |
 | **Nov 2025** | **115,001,607** | **114,876,170** (Dec 2025 release; 114,866,073 in the Nov release) | **no** (-0.11 %) |
 
@@ -116,3 +116,16 @@ the spec asks for. Default run: 10 sessions, 400 customers, 1,000 cards, seed 20
 The fraud rules' precision and recall in `mart_fraud_rule_performance` are measured against
 the simulator's own injected labels, so they say how well the rules find *these* synthetic
 patterns and nothing about real-world fraud detection.
+
+## 5. Independent reproduction
+
+A second, independent run on 10 October 2026 started from an empty data directory (fresh
+downloads of every source, same seed) and reproduced every figure above exactly: 7,747
+postings, 42 rejections, 254 replays, 2 conflicts, 1,500 re-delivered records, 27,843 / 8,084
+landed rows merged to 26,638 / 7,789, 71 reconciliation rows all OK, `dbt build` PASS=79
+WARN=0 ERROR=0, and the same UPI, card and Robinhood headline numbers. The Q2 2026 and
+Q4 2025 earnings releases were re-read directly from EDGAR for that review (funded customers
+28.4 M, platform assets $369 B, net deposits $21.7 B, revenue $776 M / $389 M / $143 M =
+$1,308 M; Q4 2025 platform assets $324 B against the 10-K's $322.1 B). That run took about
+33 minutes because it shared the machine with the test suite; the 651 s quoted in the README
+is from an unloaded run.

@@ -73,6 +73,12 @@ variable "github_repository" {
   default     = ""
 }
 
+variable "tf_state_bucket" {
+  description = "Existing S3 bucket for the Terraform state (the deploy role gets access to the fintech-broking-cards-aws/ key prefix only)."
+  type        = string
+  default     = ""
+}
+
 variable "create_github_oidc_provider" {
   description = "Create the account's GitHub OIDC identity provider (only one may exist per account)."
   type        = bool

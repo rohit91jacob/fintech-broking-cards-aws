@@ -34,6 +34,17 @@ variable "partition" {
   type        = string
 }
 
+variable "tf_state_bucket" {
+  description = "S3 bucket holding the Terraform state (empty = none). The role gets read/write on the project's state key prefix only."
+  type        = string
+  default     = ""
+}
+
+variable "project_tag" {
+  description = "Value of the Project tag on this stack's resources; KMS key management is limited to keys carrying it."
+  type        = string
+}
+
 variable "state_resource_arns" {
   description = "Extra resources the deploy role may read (e.g. the lake bucket for smoke tests)."
   type        = list(string)
@@ -41,6 +52,7 @@ variable "state_resource_arns" {
 }
 
 locals {
+  glue_prefix  = replace(var.name, "-", "_")
   provider_arn = "arn:${var.partition}:iam::${var.account_id}:oidc-provider/token.actions.githubusercontent.com"
 }
 
@@ -50,8 +62,8 @@ resource "aws_iam_openid_connect_provider" "github" {
   client_id_list = ["sts.amazonaws.com"]
 }
 
-# Short-lived credentials for GitHub Actions: only workflows on main of this repository, in the
-# "aws-dev" environment, can assume the role. No static access keys exist anywhere.
+# Short-lived credentials for GitHub Actions: only jobs of this repository that run in the
+# "aws-dev" environment (protect it with required reviewers / branch rules) can assume the role. No static access keys exist anywhere.
 data "aws_iam_policy_document" "trust" {
   #checkov:skip=CKV_AWS_358:aud and sub are both pinned with StringEquals; sub is repo:<var.github_repository>:environment:aws-dev, which checkov cannot resolve statically.
   statement {
@@ -85,7 +97,7 @@ data "aws_iam_policy_document" "deploy" {
     sid = "ManageProjectResources"
     actions = [
       "dynamodb:*", "s3:*", "firehose:*", "lambda:*", "apigateway:*", "glue:*", "athena:*",
-      "logs:*", "sqs:*", "sns:*", "cloudwatch:*", "budgets:*", "kms:*",
+      "logs:*", "sqs:*", "sns:*", "cloudwatch:*", "budgets:*",
     ]
     resources = [
       "arn:${var.partition}:dynamodb:*:${var.account_id}:table/${var.name}-*",
@@ -95,13 +107,41 @@ data "aws_iam_policy_document" "deploy" {
       "arn:${var.partition}:logs:*:${var.account_id}:log-group:*${var.name}*",
       "arn:${var.partition}:sqs:*:${var.account_id}:${var.name}-*",
       "arn:${var.partition}:sns:*:${var.account_id}:${var.name}-*",
-      "arn:${var.partition}:glue:*:${var.account_id}:*",
+      "arn:${var.partition}:glue:*:${var.account_id}:catalog",
+      "arn:${var.partition}:glue:*:${var.account_id}:database/${local.glue_prefix}_*",
+      "arn:${var.partition}:glue:*:${var.account_id}:table/${local.glue_prefix}_*/*",
       "arn:${var.partition}:athena:*:${var.account_id}:workgroup/${var.name}-*",
       "arn:${var.partition}:cloudwatch:*:${var.account_id}:alarm:${var.name}-*",
       "arn:${var.partition}:budgets::${var.account_id}:budget/${var.name}-*",
       "arn:${var.partition}:apigateway:*::/apis*",
-      "arn:${var.partition}:kms:*:${var.account_id}:key/*",
     ]
+  }
+  # Key management only on keys tagged as this project's (the stack tags everything via
+  # default_tags), and only the project's alias.
+  statement {
+    sid       = "ProjectKmsKeys"
+    actions   = ["kms:*"]
+    resources = ["arn:${var.partition}:kms:*:${var.account_id}:key/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [var.project_tag]
+    }
+  }
+  statement {
+    sid       = "ProjectKmsAlias"
+    actions   = ["kms:CreateAlias", "kms:DeleteAlias", "kms:UpdateAlias"]
+    resources = ["arn:${var.partition}:kms:*:${var.account_id}:alias/${var.name}*"]
+  }
+  statement {
+    sid       = "CreateTaggedKeysOnly"
+    actions   = ["kms:CreateKey", "kms:TagResource"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [var.project_tag]
+    }
   }
   statement {
     sid       = "ProjectRoles"
@@ -110,7 +150,7 @@ data "aws_iam_policy_document" "deploy" {
   }
   statement {
     sid       = "ReadOnlyDiscovery"
-    actions   = ["sts:GetCallerIdentity", "kms:CreateKey", "kms:ListAliases", "dynamodb:ListTables", "lambda:ListFunctions"]
+    actions   = ["sts:GetCallerIdentity", "kms:ListAliases", "dynamodb:ListTables", "lambda:ListFunctions"]
     resources = ["*"] # these actions do not support resource-level permissions
   }
   statement {
@@ -118,10 +158,31 @@ data "aws_iam_policy_document" "deploy" {
     actions   = ["s3:GetObject", "s3:ListBucket"]
     resources = concat(var.state_resource_arns, [for a in var.state_resource_arns : "${a}/*"])
   }
+  dynamic "statement" {
+    for_each = var.tf_state_bucket == "" ? [] : [1]
+    content {
+      sid       = "TerraformStateList"
+      actions   = ["s3:ListBucket"]
+      resources = ["arn:${var.partition}:s3:::${var.tf_state_bucket}"]
+      condition {
+        test     = "StringLike"
+        variable = "s3:prefix"
+        values   = ["fintech-broking-cards-aws/*"]
+      }
+    }
+  }
+  dynamic "statement" {
+    for_each = var.tf_state_bucket == "" ? [] : [1]
+    content {
+      sid       = "TerraformStateObjects"
+      actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+      resources = ["arn:${var.partition}:s3:::${var.tf_state_bucket}/fintech-broking-cards-aws/*"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "deploy" {
-  #checkov:skip=CKV_AWS_290:Write actions are constrained to ARNs with the project prefix; kms:CreateKey cannot be scoped.
+  #checkov:skip=CKV_AWS_290:Write actions are constrained to project-prefixed ARNs; kms:CreateKey/TagResource use "*" but require the Project request tag.
   #checkov:skip=CKV_AWS_355:Only discovery actions without resource-level support use "*".
   #checkov:skip=CKV_AWS_289:Permission management is limited to roles with the project prefix.
   #checkov:skip=CKV_AWS_286:PassRole is limited to roles with the project prefix.

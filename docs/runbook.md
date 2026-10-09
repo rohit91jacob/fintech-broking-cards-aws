@@ -86,3 +86,12 @@ None are needed. No workflow uses static cloud keys. The optional `deploy` workf
 an AWS role through GitHub OIDC and only runs when the repository variables
 `AWS_DEPLOY_ROLE_ARN` and `TF_STATE_BUCKET` are set; it plans by default and applies only when
 dispatched with `apply = true`.
+
+Bootstrapping the deploy role (one-off, from a workstation with admin credentials for the
+target account): run `terraform apply` with `github_repository = "<owner>/<repo>"`,
+`tf_state_bucket = "<existing state bucket>"` and, if the account has no GitHub OIDC provider
+yet, `create_github_oidc_provider = true`. The role it creates can only be assumed by jobs in
+the repository's `aws-dev` environment; it may manage resources named with the project prefix,
+KMS keys tagged `Project = fintech-broking-cards-aws`, and the state bucket's
+`fintech-broking-cards-aws/` key prefix. The workflow passes the same `github_repository` and
+`tf_state_bucket` values (as `TF_VAR_*`) so later plans do not try to remove the role.
