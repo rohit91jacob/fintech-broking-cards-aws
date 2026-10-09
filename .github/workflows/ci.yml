@@ -1,0 +1,157 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_LOCKED: "1"
+  PYTHON_VERSION: "3.12"
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  lint:
+    name: lint, lockfile, secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: uv.lock is in sync with pyproject.toml
+        run: uv lock --check
+      - run: uv sync --only-group dev --no-install-project
+      - name: ruff check
+        run: uv run --no-sync ruff check --output-format=github .
+      - name: ruff format
+        run: uv run --no-sync ruff format --check .
+      - name: no fixture over 300 KB
+        run: |
+          big=$(find tests/fixtures -type f -size +300k)
+          if [ -n "$big" ]; then echo "$big"; exit 1; fi
+      - name: gitleaks (full history)
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo"
+          ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --redact --verbose
+
+  unit:
+    name: unit tests (in-process moto)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - run: uv sync
+      - run: uv run pytest tests/unit -q --cov --cov-report=term --cov-report=xml
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: coverage.xml
+
+  pipeline:
+    name: pipeline on fixtures + dbt build (DuckDB) + dbt compile (Athena)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DBT_TARGET: ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: End-to-end tests (all layers, DQ gates, reconciliation, idempotent rerun)
+        run: uv run pytest -m e2e tests/e2e -v
+      - name: CLI run on the fixtures (ingest -> simulate -> dbt build -> site)
+        run: make run-fixtures
+      - name: Reconciliation report
+        run: FBC_DATA_DIR=data-fixtures uv run fbc reconcile
+      - name: dbt compile for Athena (offline; no AWS account)
+        run: make dbt-athena-compile
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fixture-site-and-athena-sql
+          path: |
+            site-fixtures
+            dbt/target/compiled
+
+  emulator:
+    name: AWS endpoint integration (LocalStack when a token is configured, else moto server)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - run: uv sync
+      - name: Start LocalStack (DynamoDB, DynamoDB Streams, S3, Firehose)
+        if: env.LOCALSTACK_AUTH_TOKEN != ''
+        run: |
+          docker run -d --name localstack -p 4566:4566 \
+            -e SERVICES=dynamodb,dynamodbstreams,s3,firehose,kinesis \
+            -e LOCALSTACK_AUTH_TOKEN \
+            localstack/localstack:2026.09.1
+          for i in $(seq 1 60); do
+            if curl -fs http://localhost:4566/_localstack/health | grep -q '"dynamodb"'; then break; fi
+            sleep 2
+          done
+          curl -s http://localhost:4566/_localstack/health
+          echo "FBC_AWS_ENDPOINT_URL=http://localhost:4566" >> "$GITHUB_ENV"
+      - name: Integration test (persistent backend, rerun must be all replays)
+        run: uv run pytest -m integration tests/integration -v
+      - name: LocalStack logs
+        if: failure() && env.LOCALSTACK_AUTH_TOKEN != ''
+        run: docker logs localstack | tail -n 200
+
+  terraform:
+    name: terraform fmt / validate / tflint / checkov
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: v0.64.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: terraform fmt
+        run: terraform -chdir=infra/terraform fmt -check -recursive
+      - name: terraform validate
+        run: |
+          terraform -chdir=infra/terraform init -backend=false -input=false
+          terraform -chdir=infra/terraform validate
+      - name: tflint
+        working-directory: infra/terraform
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tflint --init
+          tflint --recursive --config "$PWD/.tflint.hcl" --format compact
+      - name: checkov
+        run: uvx --from checkov checkov -d infra/terraform --framework terraform --quiet --compact

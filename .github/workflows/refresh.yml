@@ -1,0 +1,113 @@
+name: refresh
+
+# Weekday refresh of the results site. NSE publishes the day's bhavcopy in the evening (IST),
+# so the job runs at 14:30 UTC (20:00 IST) Monday to Friday. Each run downloads the latest
+# SEC filings, the last 10 NSE sessions and the latest RBI releases (all credential-free),
+# re-runs the seeded simulation over that window, rebuilds the marts and publishes the site.
+# The raw download directory is cached between runs: past bhavcopies and RBI releases are
+# immutable, so only new files are fetched.
+
+on:
+  schedule:
+    - cron: "30 14 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+env:
+  UV_LOCKED: "1"
+  PYTHON_VERSION: "3.12"
+  PYTHONIOENCODING: utf-8
+  FBC_DATA_DIR: /home/runner/fbc-data
+  # SEC requires a descriptive User-Agent with a contact; set the repository variable to yours.
+  FBC_SEC_USER_AGENT: ${{ vars.SEC_USER_AGENT || 'fintech-broking-cards-aws portfolio-project contact@example.com' }}
+
+jobs:
+  build:
+    name: refresh data + build site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Restore raw downloads from the previous run
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.FBC_DATA_DIR }}/raw
+          key: fbc-raw-${{ github.run_id }}
+          restore-keys: fbc-raw-
+      - run: uv sync
+      - name: Ingest (exit 2 = no usable source files, 3 = data-quality gate)
+        run: uv run fbc ingest
+      - name: Save raw downloads for the next run
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.FBC_DATA_DIR }}/raw
+          key: fbc-raw-${{ github.run_id }}
+      - name: Simulate through the emulated AWS pipeline (exit 4 = reconciliation break)
+        run: uv run fbc simulate
+      - name: dbt build
+        run: uv run fbc transform
+      - name: Build the results site
+        run: |
+          uv run fbc report --out site
+          {
+            echo "### Results site"
+            echo '```json'
+            cat site/summary.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    name: publish to GitHub Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  alert:
+    name: open or update a failure issue
+    needs: [build, deploy]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TITLE: Scheduled refresh is failing
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open or comment on the tracking issue
+        run: |
+          body="The scheduled \`refresh\` run failed: $RUN_URL
+
+          See docs/runbook.md#scheduled-refresh-fails. Close this issue once a run is green."
+          number=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "Failed again: $RUN_URL"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
