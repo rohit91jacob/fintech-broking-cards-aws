@@ -1,0 +1,90 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fintech-broking-cards-aws"
+version = "0.1.0"
+description = "Event-driven double-entry ledger for broking and cards on (emulated) AWS: DynamoDB -> Streams -> Lambda -> Firehose -> S3 Iceberg -> dbt."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "rohit91jacob" }]
+dependencies = [
+    "boto3>=1.40,<2",
+    # dbt-core / dbt-duckdb / duckdb / pyiceberg move together (the iceberg source plugin).
+    "dbt-core>=1.12,<1.13",
+    "dbt-duckdb==1.11.0",
+    "duckdb==1.5.6",
+    "pyiceberg[pyarrow,sql-sqlite]==0.12.0",
+    # In-process AWS emulator; moto_patches.py is written against this release line.
+    "moto[dynamodb,firehose,s3,server]>=5.2,<5.3",
+    "openpyxl>=3.1,<4",
+    "pyarrow>=21,<27",
+    "requests>=2.32,<3",
+]
+
+[project.scripts]
+fbc = "fbc.cli:main"
+
+[project.optional-dependencies]
+# Only needed to compile the dbt project for the Athena target (CI does this offline).
+athena = ["dbt-athena==1.11.1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fbc"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4",
+    "pytest>=9",
+    "pytest-cov>=7",
+    "ruff>=0.16,<0.17",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+extend-exclude = ["dbt/target", "dbt/logs", "site"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "C4", "PTH", "PIE", "RET", "S", "T20"]
+ignore = [
+  "E501",   # ruff format owns line length; long SQL / HTML strings are left intact
+  "RET504", # assign-then-return keeps pipeline steps readable
+  "S608",   # SQL is built from fixed identifiers only
+  "S101",   # asserts in tests
+  "RUF001", # the rupee sign and similar characters are intentional in labels
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "PTH"]
+"scripts/**" = ["T201", "S311"]
+"src/fbc/cli.py" = ["T201"]
+"src/fbc/sim/**" = ["S311"]  # the simulator uses a seeded PRNG on purpose, not for security
+
+[tool.ruff.lint.isort]
+known-first-party = ["fbc"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "e2e: whole pipeline on fixtures, including dbt build (about 1-2 minutes)",
+  "network: downloads from the real public sources",
+  "integration: needs an AWS endpoint (LocalStack in CI; falls back to an in-process moto server)",
+]
+filterwarnings = ["ignore:Delete operation did not match any records:UserWarning"]
+
+[tool.coverage.run]
+source = ["fbc"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
