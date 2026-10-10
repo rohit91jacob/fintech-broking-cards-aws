@@ -54,7 +54,7 @@ def cmd_simulate(args: argparse.Namespace) -> int:
             )
         }
     )
-    return 0 if summary["reconciliation_ok"] else 4
+    return 0
 
 
 def cmd_transform(args: argparse.Namespace) -> int:
@@ -70,9 +70,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     settings = _settings(args)
     _print({"ingest": ingest(settings, offline=args.offline)})
-    summary = simulate(settings)
-    if not summary["reconciliation_ok"]:
-        return 4
+    simulate(settings)
     transform(settings)
     if args.report:
         build_site(settings, Path(args.report))
@@ -197,12 +195,16 @@ def main(argv: list[str] | None = None) -> int:
     for noisy in ("botocore", "urllib3", "moto", "werkzeug"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     from fbc.quality.checks import QualityGateFailed
+    from fbc.recon import ReconciliationBreak
 
     try:
         return args.fn(args)
     except QualityGateFailed as exc:
         logging.error("data-quality gate failed: %s", exc)
         return 3
+    except ReconciliationBreak as exc:
+        logging.error("reconciliation break: %s", exc)
+        return 4
     except FileNotFoundError as exc:
         logging.error("%s", exc)
         return 2

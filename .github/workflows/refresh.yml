@@ -56,7 +56,7 @@ jobs:
         with:
           path: ${{ env.FBC_DATA_DIR }}/raw
           key: fbc-raw-v2-${{ github.run_id }}
-      - name: Simulate through the emulated AWS pipeline (exit 4 = reconciliation break)
+      - name: Simulate through the emulated AWS pipeline (exit 4 = reconciliation break, 3 = lake data-quality gate)
         run: uv run fbc simulate
       - name: dbt build
         run: uv run fbc transform

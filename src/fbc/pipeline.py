@@ -26,7 +26,7 @@ from fbc.ledger.api import LedgerApi
 from fbc.ledger.service import LedgerService
 from fbc.ledger.stream import StreamPoller, handler
 from fbc.quality import checks
-from fbc.recon import reconcile, results_table, snapshot_table
+from fbc.recon import ReconciliationBreak, reconcile, results_table, snapshot_table
 from fbc.sim.calibration import card_calibration, price_panel
 from fbc.sim.producer import Simulator
 
@@ -164,6 +164,10 @@ def simulate(settings: Settings) -> dict[str, Any]:
     (settings.run_dir / "simulation_summary.json").write_text(
         json.dumps(summary, indent=2, default=_json_default), encoding="utf-8"
     )
+    # The lake gate lists the reconciliation as one of its checks: raise a break first, so that
+    # it exits 4 (reconciliation break) and not 3 (data-quality gate).
+    if not recon_ok:
+        raise ReconciliationBreak([c for c in results if not c.ok])
     checks.gate(dq)
     return summary
 

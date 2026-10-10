@@ -13,7 +13,8 @@ Checks
 ``card_outstanding``       approved authorisations - bill payments per card equal OUTSTANDING
 ``constraints``            no constrained balance is negative or above its credit limit
 
-Any break makes ``fbc reconcile`` exit with status 4.
+Any break makes ``fbc simulate`` and ``fbc run`` (``ReconciliationBreak``) and
+``fbc reconcile`` exit with status 4.
 """
 
 from __future__ import annotations
@@ -62,6 +63,18 @@ class Check:
     @property
     def ok(self) -> bool:
         return self.expected == self.actual
+
+
+class ReconciliationBreak(Exception):
+    """At least one check broke; the CLI exits with status 4."""
+
+    def __init__(self, breaks: list[Check]):
+        self.breaks = breaks
+        super().__init__(
+            "; ".join(
+                f"{c.name} [{c.scope}]: expected {c.expected}, actual {c.actual}" for c in breaks
+            )
+        )
 
 
 def _d(value: Any) -> Decimal:

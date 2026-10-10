@@ -6,8 +6,8 @@
 |---|---|---|
 | 0 | OK | |
 | 2 | A source file is missing: no SEC companyfacts, or no NSE/RBI files in the raw directory *and* none in `FBC_FIXTURE_DIR` | The `fetch` block printed by `fbc ingest`; `$FBC_DATA_DIR/raw/` |
-| 3 | A data-quality gate failed (error severity), e.g. `nse_trading_days`: sessions missing from the requested NSE window | `$FBC_DATA_DIR/runs/dq_raw.json` or `dq_lake.json` |
-| 4 | Reconciliation break | `fbc reconcile`; `runs/simulation_summary.json` -> `reconciliation` |
+| 3 | A data-quality gate failed (error severity): the raw gate in `fbc ingest` (e.g. `nse_trading_days`: sessions missing from the requested NSE window), the lake gate in `fbc simulate` on a ledger that reconciled, or either gate in `fbc dq` | `$FBC_DATA_DIR/runs/dq_raw.json` or `dq_lake.json` |
+| 4 | Reconciliation break: `fbc simulate` and `fbc run` stop on it before the lake gate; `fbc reconcile` exits 4 while the latest reconciliation has a `BREAK` | `fbc reconcile`; `runs/simulation_summary.json` -> `reconciliation` |
 | 5 | `dbt build` failed | `dbt/logs/dbt.log`, the failing model or test in the output |
 
 ## Everyday commands
@@ -61,7 +61,8 @@ The `refresh` workflow opens (or comments on) an issue titled "Scheduled refresh
      type. Add it to `REVENUE_MEMBERS_ALT` in `fbc/sources/sec.py`.
    * `hood_kpis_rows`: the KPI table label changed (it went from "AUC" to "Total Platform
      Assets" in 2025). Extend `_KPI_LABELS`.
-4. **Simulate, exit 4.** See "Reconciliation break" below.
+4. **Simulate, exit 4.** See "Reconciliation break" below. **Exit 3** is the lake gate failing
+   on a ledger that reconciled; `dq_lake.json` names the check.
 5. **dbt build.** Run `uv run fbc dbt -- build -s <model>+` locally against the same data.
 
 Close the issue once a run is green.

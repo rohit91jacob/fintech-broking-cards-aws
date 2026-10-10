@@ -3,6 +3,8 @@
 ``raw`` runs after ingest (before anything is simulated or transformed), ``lake`` after the
 event pipeline has landed the ledger in Iceberg. dbt tests gate the marts. An ``error``
 failure stops the pipeline (exit status 3); a ``warn`` is reported and kept in the summary.
+The lake gate includes the reconciliation's outcome, but ``fbc simulate`` stops on a
+reconciliation break before applying it (exit status 4).
 """
 
 from __future__ import annotations
