@@ -28,8 +28,10 @@ locals {
   protect = var.environment == "prod"
 }
 
-# Append-only journal: one header item (sk = "H") and one item per leg (sk = "L#001"...).
-# Its stream (NEW_IMAGE) drives the Lambda that ships entries to Firehose.
+# Append-only journal: one header item (sk = "H") and one item per leg (sk = "L#001"...),
+# each put with attribute_not_exists, so a posting is never applied twice, not even after its
+# idempotency key has expired. Its stream (NEW_IMAGE) drives the Lambda that ships entries to
+# Firehose.
 resource "aws_dynamodb_table" "journal" {
   name                        = "${var.name}-ledger-journal"
   billing_mode                = "PAY_PER_REQUEST"
@@ -83,7 +85,8 @@ resource "aws_dynamodb_table" "balances" {
   }
 }
 
-# Idempotency keys, written in the same transaction with attribute_not_exists; expire after 30 days.
+# Idempotency keys, written in the same transaction with attribute_not_exists; expire after 30 days
+# (later retries are answered from the journal header).
 resource "aws_dynamodb_table" "idempotency" {
   name                        = "${var.name}-ledger-idempotency"
   billing_mode                = "PAY_PER_REQUEST"

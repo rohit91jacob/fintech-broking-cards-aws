@@ -2,6 +2,7 @@ import json
 from decimal import Decimal
 
 from fbc.ledger.api import brokerage
+from fbc.ledger.stream import StreamPoller
 
 
 def call(api, route, body, key="k"):
@@ -45,6 +46,58 @@ def test_same_key_different_body_is_a_conflict(api, ledger):
     code, body = deposit(api, amount="99")
     assert code == 409 and body["status"] == "CONFLICT"
     assert ledger.balance("CUST#C1:CASH", "INR") == Decimal("10000")
+
+
+def expire(ledger, key):
+    """What DynamoDB TTL does to an idempotency record 30 days after it was written."""
+    ledger.aws.ddb.delete_item(
+        TableName=ledger.n.idempotency_table, Key={"idempotency_key": {"S": key}}
+    )
+
+
+def ledger_state(ledger):
+    """Balances, journal items and every write the journal has seen (its stream), so that an
+    overwrite with identical content shows up too."""
+    events: list[str] = []
+
+    def collect(event, _ctx):
+        events.extend(r["eventName"] for r in event["Records"])
+        return {}
+
+    ddb = ledger.aws.ddb
+    arn = ddb.describe_table(TableName=ledger.n.journal_table)["Table"]["LatestStreamArn"]
+    StreamPoller(ledger.aws, arn, collect).drain()
+    journal = ddb.scan(TableName=ledger.n.journal_table, ConsistentRead=True)["Items"]
+    return (
+        sorted(ledger.scan_balances(), key=lambda b: (b["account"], b["unit"])),
+        sorted(journal, key=lambda i: (i["txn_id"]["S"], i["sk"]["S"])),
+        events,
+    )
+
+
+def test_retry_after_the_idempotency_record_expired_does_not_post_twice(api, ledger):
+    assert deposit(api)[0] == 201
+    before = ledger_state(ledger)
+    expire(ledger, "dep1")
+    code, body = deposit(api)
+    assert code == 200 and body["status"] == "REPLAYED" and body["original_status"] == "POSTED"
+    # The key reused with a different body is still a conflict.
+    code, body = deposit(api, amount="99")
+    assert code == 409 and body["status"] == "CONFLICT"
+    assert ledger_state(ledger) == before
+    assert ledger.balance("CUST#C1:CASH", "INR") == Decimal("10000")
+
+
+def test_rejection_retried_after_the_idempotency_record_expired_stays_rejected(api, ledger):
+    deposit(api, amount="100")
+    assert order(api, "BUY", 10, key="o1")[0] == 422  # 1,000 + fee > 100
+    expire(ledger, "o1")
+    deposit(api, amount="5000", key="dep2")  # enough cash now: a new posting would succeed
+    before = ledger_state(ledger)
+    code, body = order(api, "BUY", 10, key="o1")
+    assert code == 200 and body["status"] == "REPLAYED" and body["original_status"] == "REJECTED"
+    assert ledger_state(ledger) == before
+    assert ledger.balance("CUST#C1:SEC_PENDING", "INSYN000010") == Decimal(0)
 
 
 def test_buy_blocks_cash_and_overdraft_is_rejected(api, ledger):

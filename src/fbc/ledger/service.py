@@ -3,14 +3,18 @@
 One ``TransactWriteItems`` call per posting contains:
 
 1. ``Put`` on the idempotency table with ``attribute_not_exists`` -- a retried request fails here;
-2. ``Put`` of the journal header (``sk = "H"``) and one ``Put`` per leg (``sk = "L#001"``...);
+2. ``Put`` of the journal header (``sk = "H"``) and one ``Put`` per leg (``sk = "L#001"``...),
+   each with ``attribute_not_exists(txn_id)``. ``txn_id`` is derived from the idempotency key,
+   so a retry that arrives after its idempotency record has expired (30-day TTL) fails here;
 3. ``Update ... ADD balance :amount`` on the balances table for each leg, with a
    ``ConditionExpression`` for constrained accounts (no overdraft, credit limit, no short sale).
 
 If any condition fails DynamoDB cancels the whole transaction. The service then tells the
-cases apart from the cancellation reasons: a duplicate idempotency key is a replay (the
-original outcome is returned), a failed balance condition becomes a ``REJECTED`` header,
-written with its own idempotency record so that retrying a rejected request is also stable.
+cases apart from the cancellation reasons: an existing idempotency record or journal entry
+makes the request a replay (the original outcome is returned) or, with a different body, a
+conflict; a failed balance condition becomes a ``REJECTED`` header, written with its own
+idempotency record so that retrying a rejected request is also stable. The journal header
+keeps the request hash, so it answers retries once the idempotency record has expired.
 The journal table's stream (NEW_IMAGE) feeds the Lambda that ships entries to Firehose.
 """
 
@@ -84,12 +88,10 @@ class LedgerService:
         now = datetime.now(UTC).isoformat()
         items: list[dict[str, Any]] = [
             self._idempotency_put(posting, txn_id, request_hash, "POSTED", now),
-            {"Put": {"TableName": self.n.journal_table, "Item": self._header(posting, "POSTED")}},
+            self._journal_put(self._header(posting, request_hash, "POSTED")),
         ]
         for i, leg in enumerate(posting.legs, start=1):
-            items.append(
-                {"Put": {"TableName": self.n.journal_table, "Item": self._leg(posting, leg, i)}}
-            )
+            items.append(self._journal_put(self._leg(posting, leg, i)))
         for leg in posting.legs:
             items.append(self._balance_update(posting, leg, now))
 
@@ -102,12 +104,16 @@ class LedgerService:
                 # transient failure into a permanent answer for this idempotency key.
                 self.stats["transient"] += 1
                 raise TransientLedgerError(codes) from exc
-            if codes and codes[0] == "ConditionalCheckFailed":
+            # Items before ``first_balance`` are the idempotency record and the journal items.
+            # A failed condition on any of them means the key was used before: its record is
+            # still there or, after the TTL removed it, the journal items it wrote are.
+            first_balance = 2 + len(posting.legs)
+            if "ConditionalCheckFailed" in codes[:first_balance]:
                 return self._replay(posting, request_hash)
             failed = [
-                posting.legs[i - 2 - len(posting.legs)]
+                posting.legs[i - first_balance]
                 for i, code in enumerate(codes)
-                if code == "ConditionalCheckFailed" and i >= 2 + len(posting.legs)
+                if code == "ConditionalCheckFailed" and i >= first_balance
             ]
             reason = (
                 "insufficient balance or limit on "
@@ -121,12 +127,12 @@ class LedgerService:
 
     def _reject(self, posting: Posting, request_hash: str, reason: str) -> Result:
         now = datetime.now(UTC).isoformat()
-        header = self._header(posting, "REJECTED", reason)
+        header = self._header(posting, request_hash, "REJECTED", reason)
         try:
             self.aws.ddb.transact_write_items(
                 TransactItems=[
                     self._idempotency_put(posting, posting.txn_id, request_hash, "REJECTED", now),
-                    {"Put": {"TableName": self.n.journal_table, "Item": header}},
+                    self._journal_put(header),
                 ]
             )
         except self.aws.ddb.exceptions.TransactionCanceledException:
@@ -135,21 +141,35 @@ class LedgerService:
         return Result("REJECTED", posting.txn_id, reason)
 
     def _replay(self, posting: Posting, request_hash: str) -> Result:
-        record = self.aws.ddb.get_item(
-            TableName=self.n.idempotency_table,
-            Key={"idempotency_key": {"S": posting.idempotency_key}},
-            ConsistentRead=True,
-        ).get("Item")
-        if record is None:  # pragma: no cover - only under concurrent deletes
-            raise RuntimeError(f"idempotency record vanished for {posting.idempotency_key}")
-        stored = _plain(record)
-        if stored["request_hash"] != request_hash:
+        """The first outcome for a key used before: from its idempotency record or, once the
+        TTL has removed that, from the journal header written in the same transaction."""
+        stored = self._get(self.n.idempotency_table, {"idempotency_key": posting.idempotency_key})
+        if stored is None:
+            stored = self._get(self.n.journal_table, {"txn_id": posting.txn_id, "sk": "H"})
+        if stored is None:  # pragma: no cover - journal items are never deleted
+            raise RuntimeError(f"no record of idempotency key {posting.idempotency_key}")
+        if stored.get("request_hash") != request_hash:
             self.stats["conflict"] += 1
             return Result(
                 "CONFLICT", stored["txn_id"], "idempotency key reused with a different request"
             )
         self.stats["replayed"] += 1
         return Result("REPLAYED", stored["txn_id"], original_status=stored["status"])
+
+    def _get(self, table: str, key: dict[str, Any]) -> dict[str, Any] | None:
+        item = self.aws.ddb.get_item(TableName=table, Key=_item(key), ConsistentRead=True)
+        return _plain(item["Item"]) if "Item" in item else None
+
+    def _journal_put(self, item: dict[str, Any]) -> dict[str, Any]:
+        # Journal items are written once. txn_id is derived from the idempotency key, so a key
+        # used before fails this condition even after its idempotency record has expired.
+        return {
+            "Put": {
+                "TableName": self.n.journal_table,
+                "Item": item,
+                "ConditionExpression": "attribute_not_exists(txn_id)",
+            }
+        }
 
     def _idempotency_put(
         self, posting: Posting, txn_id: str, request_hash: str, status: str, now: str
@@ -165,7 +185,8 @@ class LedgerService:
                         "status": status,
                         "txn_type": posting.txn_type,
                         "created_at": now,
-                        # DynamoDB TTL attribute: keys are kept for 30 days.
+                        # DynamoDB TTL attribute: records are kept for 30 days; the journal
+                        # header answers later retries (``_replay``).
                         "expires_at": int(datetime.now(UTC).timestamp()) + 30 * 86400,
                     }
                 ),
@@ -173,7 +194,9 @@ class LedgerService:
             }
         }
 
-    def _header(self, posting: Posting, status: str, reason: str | None = None) -> dict[str, Any]:
+    def _header(
+        self, posting: Posting, request_hash: str, status: str, reason: str | None = None
+    ) -> dict[str, Any]:
         return _item(
             {
                 "txn_id": posting.txn_id,
@@ -185,6 +208,7 @@ class LedgerService:
                 "business_date": posting.business_date,
                 "event_ts": posting.event_ts,
                 "idempotency_key": posting.idempotency_key,
+                "request_hash": request_hash,
                 "leg_count": len(posting.legs) if status == "POSTED" else 0,
                 "payload": json.dumps(posting.payload, sort_keys=True, default=str),
             }
@@ -248,12 +272,8 @@ class LedgerService:
     # ------------------------------------------------------------------- reads
 
     def balance(self, account: str, unit: str) -> Decimal:
-        item = self.aws.ddb.get_item(
-            TableName=self.n.balances_table,
-            Key=_item({"account": account, "unit": unit}),
-            ConsistentRead=True,
-        ).get("Item")
-        return Decimal(_plain(item).get("balance", 0)) if item else Decimal(0)
+        item = self._get(self.n.balances_table, {"account": account, "unit": unit})
+        return Decimal(item.get("balance", 0)) if item else Decimal(0)
 
     def scan_balances(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []

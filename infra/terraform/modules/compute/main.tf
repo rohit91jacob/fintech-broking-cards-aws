@@ -112,10 +112,11 @@ data "aws_iam_policy_document" "api" {
     actions   = ["dynamodb:TransactWriteItems", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:ConditionCheckItem"]
     resources = [var.journal_table_arn, var.balances_table_arn, var.idempotency_table_arn]
   }
+  # The journal is read only to answer a retry whose idempotency record has expired.
   statement {
     sid       = "LedgerReads"
     actions   = ["dynamodb:GetItem"]
-    resources = [var.balances_table_arn, var.idempotency_table_arn]
+    resources = [var.journal_table_arn, var.balances_table_arn, var.idempotency_table_arn]
   }
   statement {
     sid       = "Kms"
