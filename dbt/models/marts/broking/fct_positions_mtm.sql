@@ -1,5 +1,5 @@
--- SIMULATED positions marked to market at REAL NSE closing prices,
--- one row per customer, ISIN and session.
+-- SIMULATED positions marked to market at the raw_nse_bhavcopy closing prices (SYNTHETIC by
+-- default), one row per customer, ISIN and session.
 -- daily_pnl = change in market value - net cash paid for the day's trades - fees.
 with flows as (
     select

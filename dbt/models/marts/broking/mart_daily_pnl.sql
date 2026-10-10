@@ -1,4 +1,5 @@
--- SIMULATED customer-level daily P&L, marked to market at REAL NSE closes.
+-- SIMULATED customer-level daily P&L, marked to market at the raw_nse_bhavcopy closes
+-- (SYNTHETIC by default).
 with by_customer as (
     select
         as_of_date,

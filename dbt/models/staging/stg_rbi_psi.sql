@@ -1,5 +1,6 @@
--- REAL. Each month appears in up to three releases (as "latest", "previous" and
--- "same month last year"); keep the value from the most recent release.
+-- SYNTHETIC by default (raw_rbi_psi). Each month appears in up to three releases (as
+-- "latest", "previous" and "same month last year"); keep the value from the most recent
+-- release.
 with ranked as (
     select
         *,

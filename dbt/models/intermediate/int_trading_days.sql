@@ -1,4 +1,5 @@
--- REAL NSE sessions inside the simulated window, with the next session (T+1).
+-- Sessions inside the simulated window, with the next session (T+1): the trade dates of
+-- raw_nse_bhavcopy (SYNTHETIC by default), which the raw gate checks against NSE's calendar.
 with days as (
     select distinct trade_date from {{ ref('stg_nse_prices') }}
 ),

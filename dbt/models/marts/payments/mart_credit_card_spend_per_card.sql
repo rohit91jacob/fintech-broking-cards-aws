@@ -1,4 +1,5 @@
--- REAL. Credit-card spend per card outstanding, by issuing bank and month (RBI card statistics).
+-- SYNTHETIC by default (raw_rbi_card_stats). Credit-card spend per card outstanding, by issuing
+-- bank and month (RBI card statistics layout).
 -- Spend = PoS + e-commerce + other (mail/telephone order) transactions; ATM cash is excluded.
 with base as (
     select

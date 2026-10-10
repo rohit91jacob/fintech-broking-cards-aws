@@ -3,8 +3,10 @@ version: 2
 sources:
   - name: lake
     description: >
-      Apache Iceberg tables written by the Python pipeline (raw_* = real public data,
-      sim_* / ledger_* / business_events = SIMULATED activity). Locally they are read through
+      Apache Iceberg tables written by the Python pipeline: raw_sec_* / raw_hood_* = real SEC
+      EDGAR data; raw_nse_* / raw_rbi_* = SYNTHETIC fixtures by default (NSE and RBI files only
+      when they are already in the raw directory; runs/ingest_manifest.json records which);
+      sim_* / ledger_* / business_events = SIMULATED activity. Locally they are read through
       the dbt-duckdb iceberg plugin; on Athena they are Glue tables.
     schema: "{{ 'lake' if target.type == 'duckdb' else var('lake_glue_database') }}"
     meta:
@@ -18,11 +20,11 @@ sources:
       - name: raw_hood_kpis
         description: "REAL. Key Performance Metrics table of each 10-Q/10-K (funded customers, platform assets, net deposits)."
       - name: raw_nse_bhavcopy
-        description: "REAL. NSE capital-market bhavcopy (UDiFF), stock rows. Not redistributed."
+        description: "SYNTHETIC by default. Stock rows in the NSE capital-market bhavcopy (UDiFF) layout. The NSE download is off, so unless NSE files are already in the raw directory these are the committed synthetic fixtures (symbols SYN01..., ISINs INSYN...); see DATA_LICENSE.md."
       - name: raw_rbi_psi
-        description: "REAL. RBI Payment System Indicators, long format (release, period, metric, measure)."
+        description: "SYNTHETIC by default. RBI Payment System Indicators layout, long format (release, period, metric, measure). The RBI's document server refuses automated clients, so unless its workbooks are already in the raw directory these come from the committed synthetic workbooks (source_file SYNTHETIC_*.XLSX)."
       - name: raw_rbi_card_stats
-        description: "REAL. RBI bank-wise ATM, acceptance infrastructure and card statistics."
+        description: "SYNTHETIC by default. RBI bank-wise ATM, acceptance infrastructure and card statistics layout, from the committed synthetic workbooks (banks SYNTHETIC ... BANK) unless RBI workbooks are already in the raw directory."
       - name: business_events
         description: "SIMULATED. One row per ledger request outcome (posted or rejected), via DynamoDB Streams -> Lambda -> Firehose."
       - name: ledger_entries

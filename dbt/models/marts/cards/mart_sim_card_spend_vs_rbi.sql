@@ -1,5 +1,6 @@
--- Calibration check: SIMULATED card spend per card per day against the REAL RBI average for
--- the month the simulator was calibrated on (the latest month in the card statistics).
+-- Calibration check: SIMULATED card spend per card per day against the RBI card-statistics
+-- average (SYNTHETIC by default) for the month the simulator was calibrated on (the latest
+-- month in the card statistics).
 with rbi as (
     select
         period_month,

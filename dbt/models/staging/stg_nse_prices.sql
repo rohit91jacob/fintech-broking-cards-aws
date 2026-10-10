@@ -1,4 +1,4 @@
--- REAL end-of-day prices for equity (EQ series) stocks.
+-- End-of-day prices for equity (EQ series) stocks; SYNTHETIC by default (raw_nse_bhavcopy).
 select
     trade_date,
     symbol,

@@ -13,13 +13,13 @@ models:
                 values: [BUY, SELL]
 
   - name: int_trading_days
-    description: REAL NSE sessions in the simulated window, with the next session.
+    description: Sessions in the simulated window (trade dates of raw_nse_bhavcopy, SYNTHETIC by default; the raw gate checks them against NSE's trading calendar), with the next session.
     columns:
       - name: trade_date
         data_tests: [unique, not_null]
 
   - name: fct_positions_mtm
-    description: SIMULATED positions per customer/ISIN/session marked to market at REAL closes.
+    description: SIMULATED positions per customer/ISIN/session marked to market at the raw_nse_bhavcopy closes (SYNTHETIC by default).
     data_tests:
       - dbt_utils_unique_combination:
           arguments:
@@ -51,7 +51,7 @@ models:
                 values: [SETTLED, PENDING, PARTIAL]
 
   - name: mart_upi_growth_monthly
-    description: REAL UPI monthly volume (million) and value (INR crore) with MoM / YoY growth.
+    description: UPI monthly volume (million) and value (INR crore) with MoM / YoY growth, from raw_rbi_psi (SYNTHETIC by default).
     columns:
       - name: period_month
         data_tests: [unique, not_null]
@@ -59,7 +59,7 @@ models:
         data_tests: [not_null]
 
   - name: mart_credit_card_spend_per_card
-    description: REAL credit-card spend per card by bank and month.
+    description: Credit-card spend per card by bank and month, from raw_rbi_card_stats (SYNTHETIC by default).
     data_tests:
       - dbt_utils_unique_combination:
           arguments:
@@ -93,4 +93,4 @@ models:
         data_tests: [unique]
 
   - name: mart_sim_card_spend_vs_rbi
-    description: SIMULATED card spend per card per day vs the REAL RBI average it was calibrated on.
+    description: SIMULATED card spend per card per day vs the raw_rbi_card_stats average it was calibrated on (SYNTHETIC by default).

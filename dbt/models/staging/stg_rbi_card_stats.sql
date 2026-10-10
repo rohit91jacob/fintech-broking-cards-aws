@@ -1,4 +1,5 @@
--- REAL. Bank-wise credit card statistics; values converted from Rs '000 to rupees.
+-- SYNTHETIC by default (raw_rbi_card_stats). Bank-wise credit card statistics; values
+-- converted from Rs '000 to rupees.
 select
     period_month,
     bank_group,

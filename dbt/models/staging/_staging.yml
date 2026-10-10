@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: stg_nse_prices
-    description: REAL NSE end-of-day prices, EQ series only.
+    description: End-of-day prices, EQ series only, from raw_nse_bhavcopy (SYNTHETIC by default).
     data_tests:
       - dbt_utils_unique_combination:
           arguments:
@@ -16,7 +16,7 @@ models:
         data_tests: [not_null]
 
   - name: stg_rbi_psi
-    description: REAL RBI Payment System Indicators, latest release per month.
+    description: RBI Payment System Indicators (SYNTHETIC by default), latest release per month.
     data_tests:
       - dbt_utils_unique_combination:
           arguments:
@@ -31,7 +31,7 @@ models:
                 values: [volume_lakh, value_crore, count_lakh]
 
   - name: stg_rbi_card_stats
-    description: REAL RBI bank-wise card statistics, values in rupees.
+    description: RBI bank-wise card statistics (SYNTHETIC by default), values in rupees.
     data_tests:
       - dbt_utils_unique_combination:
           arguments:

@@ -1,4 +1,5 @@
--- REAL. UPI volume and value by month (RBI Payment System Indicators), with growth rates.
+-- SYNTHETIC by default (raw_rbi_psi). UPI volume and value by month (RBI Payment System
+-- Indicators layout), with growth rates.
 with upi as (
     select
         period_month,
