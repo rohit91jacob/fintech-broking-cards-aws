@@ -40,7 +40,7 @@ fixtures: ## Rebuild the synthetic NSE/RBI fixtures (and the SEC ones from $$FBC
 	$(UV) run python scripts/make_synthetic_fixtures.py --out tests/fixtures/raw
 	@if [ -d "$(FBC_DATA_DIR)/raw/sec" ]; then $(UV) run python scripts/build_sec_fixtures.py --raw "$(FBC_DATA_DIR)/raw" --out tests/fixtures/raw; fi
 
-ingest: ## Download SEC, NSE and RBI data and land raw Iceberg tables (raw DQ gate)
+ingest: ## Download SEC (+ RBI if served; NSE off), land raw Iceberg tables (raw DQ gate)
 	$(UV) run fbc ingest
 
 ingest-offline: ## Re-parse what is already in the raw directory
@@ -55,7 +55,7 @@ transform: ## dbt build (DuckDB reading the Iceberg tables)
 dbt-athena-compile: ## Compile the dbt project for Athena (no AWS account needed)
 	cd dbt && AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test $(UV) run --extra athena dbt compile --target athena --profiles-dir . --no-populate-cache
 
-run: ## ingest + simulate + transform + report on real data
+run: ## ingest + simulate + transform + report on the live sources (synthetic NSE/RBI fallback)
 	$(UV) run fbc run --report site
 
 run-fixtures: ## The whole pipeline on the committed fixtures (offline), into ./data-fixtures

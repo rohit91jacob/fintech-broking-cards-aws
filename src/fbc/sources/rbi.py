@@ -12,7 +12,13 @@ automated clients, so it is not used directly.
 The RBI's website terms prohibit caching or framing its content without permission, so the
 files are downloaded at run time into the git-ignored raw directory and never committed. The
 results site publishes only derived aggregates, with attribution. Tests use synthetic
-workbooks in the same layout (tests/fixtures/synthetic/rbi).
+workbooks in the same layout (tests/fixtures/raw/rbi).
+
+The listing pages on www.rbi.org.in are served to an honestly identified client, but the
+workbooks on rbidocs.rbi.org.in come back as a JavaScript bot challenge ("testing whether you
+are a human visitor"). The pipeline does not pose as a browser to get past it:
+:class:`fbc.http.Refused` is raised, the source is skipped, and ingest falls back to workbooks
+already in the raw directory (for example ones saved from a browser) or to the synthetic ones.
 """
 
 from __future__ import annotations
@@ -52,14 +58,17 @@ class LayoutError(Exception):
     """The workbook no longer has the layout this parser was written for."""
 
 
-def fetch(raw_dir: Path, months: int, refresh: bool = True) -> dict[str, list[Path]]:
-    sess = http.session()
+def fetch(
+    raw_dir: Path, months: int, *, user_agent: str, refresh: bool = True
+) -> dict[str, list[Path]]:
+    sess = http.session(user_agent)
     out: dict[str, list[Path]] = {}
     for kind, (listing, pattern) in LISTINGS.items():
         page = http.fetch(sess, listing, raw_dir / "rbi" / f"{kind}_listing.html", refresh=refresh)
         links = list(dict.fromkeys(pattern.findall(page.decode("utf-8", errors="replace"))))
         if not links:
-            raise RuntimeError(f"no XLSX links found on {listing}")
+            error = http.Refused if http.is_challenge_page(page) else RuntimeError
+            raise error(f"no XLSX links found on {listing}")
         paths = []
         for url in links[:months]:
             path = raw_dir / "rbi" / kind / url.rsplit("/", 1)[1].upper()
@@ -296,6 +305,13 @@ def parse_card_stats(path: Path) -> list[dict[str, Any]]:
     if not any(r["is_total_row"] for r in out):
         raise LayoutError(f"{path.name}: Total row not found")
     return out
+
+
+def is_synthetic(*tables: pa.Table) -> bool:
+    """True if any row comes from the committed synthetic workbooks (``SYNTHETIC_*.XLSX``)."""
+    return any(
+        name.startswith("SYNTHETIC_") for t in tables for name in t["source_file"].to_pylist()
+    )
 
 
 def parse_dir(rbi_dir: Path) -> tuple[pa.Table, pa.Table]:

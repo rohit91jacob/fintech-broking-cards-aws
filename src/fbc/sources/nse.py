@@ -1,10 +1,15 @@
 """NSE India capital-market bhavcopy (end-of-day prices), UDiFF format (July 2024 onwards).
 
 URL pattern: ``nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_<YYYYMMDD>_F_0000.csv.zip``.
-A 404 means no trading session (weekend or exchange holiday), which is how the trading
-calendar is discovered. NSE does not license its data for redistribution: files are
-downloaded at run time into the (git-ignored) raw directory and are never committed or
-published. Tests use a *synthetic* file in the same layout (tests/fixtures/synthetic/nse).
+A 404 means no trading session (weekend or exchange holiday).
+
+**The download is off by default** (``FBC_NSE_DOWNLOAD=1`` turns it on). NSE's Terms of Use
+prohibit "systematic or automated data collection activities (including scraping, data mining,
+data extraction and data harvesting)" and any use of its data "for any gaming, virtual trading
+or simulation activities", and nsearchives.nseindia.com does not answer clients that identify
+themselves honestly (requests time out; see DATA_LICENSE.md). Without NSE's permission the
+pipeline prices the simulated book on the committed *synthetic* bhavcopies in the same layout
+(``tests/fixtures/raw/nse``). Files are never committed or published either way.
 """
 
 from __future__ import annotations
@@ -51,11 +56,20 @@ def file_name(day: date) -> str:
 
 
 def fetch(
-    raw_dir: Path, trading_days: int, end: date | None = None, max_lookback: int = 40
+    raw_dir: Path,
+    trading_days: int,
+    *,
+    user_agent: str,
+    end: date | None = None,
+    max_lookback: int = 40,
 ) -> list[Path]:
-    """Download the latest ``trading_days`` bhavcopies on or before ``end`` (default today)."""
+    """Download the latest ``trading_days`` bhavcopies on or before ``end`` (default today).
+
+    Stops at the first refusal (:class:`fbc.http.Refused`) instead of walking back through
+    every weekday: NSE's archive either serves this client or it does not.
+    """
     out_dir = raw_dir / "nse"
-    sess = http.session()
+    sess = http.session(user_agent)
     day = end or date.today()
     found: list[Path] = []
     for _ in range(max_lookback):
@@ -65,10 +79,15 @@ def fetch(
             path = out_dir / file_name(day)
             try:
                 # A past session's bhavcopy is final, so cached copies are reused.
-                http.fetch(sess, URL.format(d=day), path, expect=b"PK", retries=3)
+                http.fetch(sess, URL.format(d=day), path, expect=b"PK", retries=2, timeout=(10, 30))
                 found.append(path)
             except http.NotFound:
                 log.info("no NSE session on %s", day)
+            except http.Refused as exc:
+                raise http.Refused(
+                    f"NSE did not serve the bhavcopy for {day} to this client ({exc}). "
+                    "nsearchives.nseindia.com does not answer non-browser clients"
+                ) from exc
         day -= timedelta(days=1)
     if len(found) < trading_days:
         raise RuntimeError(f"only {len(found)} NSE bhavcopies found, wanted {trading_days}")
@@ -112,6 +131,11 @@ def parse_file(path: Path) -> list[dict[str, object]]:
             }
         )
     return rows
+
+
+def is_synthetic(table: pa.Table) -> bool:
+    """True if any row comes from the committed synthetic fixtures (ISINs ``INSYN...``)."""
+    return any(isin.startswith("INSYN") for isin in table["isin"].to_pylist())
 
 
 def parse_dir(nse_dir: Path) -> pa.Table:

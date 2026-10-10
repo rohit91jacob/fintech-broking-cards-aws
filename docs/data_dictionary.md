@@ -1,14 +1,20 @@
 # Data dictionary
 
-Layers: **raw** Iceberg tables (`lake.raw_*`, real public data) -> **simulated** Iceberg tables
-written by the event pipeline (`lake.business_events`, `lake.ledger_entries`, ...) -> dbt
+Layers: **raw** Iceberg tables (`lake.raw_*`: SEC EDGAR, plus NSE/RBI files or their synthetic
+stand-ins) -> **simulated** Iceberg tables written by the event pipeline
+(`lake.business_events`, `lake.ledger_entries`, ...) -> dbt
 **staging** views -> **intermediate** tables -> **marts**. Locally the Iceberg catalog is SQLite
 and the warehouse a directory; DuckDB reads the tables through the dbt-duckdb iceberg plugin.
 
 Units: INR amounts are rupees unless a column says otherwise (`_crore` = 10^7, `_lakh` = 10^5,
 `_thousand` = 10^3). USD amounts in `_musd` are millions, `_bn` billions.
 
-## Raw (real)
+## Raw
+
+The SEC tables are always real. The NSE and RBI tables hold whatever ingest found: files in the
+raw directory or, when there were none, the committed synthetic fixtures (ISINs `INSYN...`,
+`source_file` `SYNTHETIC_*.XLSX`). `runs/ingest_manifest.json` -> `sources` records which,
+and the results site labels synthetic figures.
 
 ### `lake.raw_sec_companyfacts`
 One row per XBRL fact for the us-gaap concepts in `fbc.sources.sec.FACT_CONCEPTS`.
@@ -47,7 +53,8 @@ from undimensioned `InterestIncomeExpenseNet`; `total` from undimensioned `Reven
 ### `lake.raw_nse_bhavcopy` (partitioned by `trade_date`)
 Stock rows (`FinInstrmTp = STK`) of the NSE capital-market bhavcopy: `trade_date, symbol, isin,
 series, instrument_name, open, high, low, close, prev_close, volume, turnover_inr, trades,
-source_file`. Not redistributed.
+source_file`. Not redistributed. By default these are the synthetic bhavcopies (the NSE
+download is off; see DATA_LICENSE.md).
 
 ### `lake.raw_rbi_psi`
 Long format of the RBI Payment System Indicators release.
@@ -81,7 +88,7 @@ One row per ledger request outcome, from the journal header items on the DynamoD
 | business_date, event_ts | Simulated IST date and time (naive timestamps) |
 | idempotency_key | Client-supplied key |
 | customer_id, card_id | Simulated ids (`C00001`, `K000001`) |
-| symbol, isin, side, qty, price, notional, fees, settlement_date | Orders; `price` is the real NSE VWAP of the day |
+| symbol, isin, side, qty, price, notional, fees, settlement_date | Orders; `price` is the day's VWAP from `raw_nse_bhavcopy` |
 | trade_txn_id, trade_date | Settlements: the fill being settled |
 | amount, channel, mcc, merchant_category, merchant_city | Deposits, card authorisations, bill payments |
 | injected_fraud, fraud_scenario | Simulator ground truth for card frauds (never read by the rules) |
@@ -107,9 +114,9 @@ The DynamoDB balances table at the end of the run; the reconciliation job's chec
 
 | Model | Grain | Key columns |
 |---|---|---|
-| `fct_positions_mtm` | customer x ISIN x NSE session | `quantity` (settled + pending), `close_price` (real), `market_value`, `net_cash_out`, `fees`, `daily_pnl` = change in market value - net cash paid - fees |
+| `fct_positions_mtm` | customer x ISIN x NSE session | `quantity` (settled + pending), `close_price` (from `raw_nse_bhavcopy`), `market_value`, `net_cash_out`, `fees`, `daily_pnl` = change in market value - net cash paid - fees |
 | `mart_daily_pnl` | customer x session | `open_positions`, `market_value`, `daily_pnl`, `cumulative_pnl` |
-| `mart_settlement_cash` | trade date | `settlement_date`, `expected_settlement_date` (next real NSE session), `pay_in_obligation`, `pay_out_receivable`, `net_pay_in`, `settlement_status` (`SETTLED`/`PENDING`/`PARTIAL`) |
+| `mart_settlement_cash` | trade date | `settlement_date`, `expected_settlement_date` (next session in `raw_nse_bhavcopy`), `pay_in_obligation`, `pay_out_receivable`, `net_pay_in`, `settlement_status` (`SETTLED`/`PENDING`/`PARTIAL`) |
 | `mart_upi_growth_monthly` | month | `volume_mn`, `value_crore`, `avg_ticket_inr`, `volume_mom`, `volume_yoy`, `value_yoy` |
 | `mart_credit_card_spend_per_card` | month x issuing bank (+ `ALL BANKS`) | `credit_cards_outstanding`, `cc_spend_inr` (PoS + e-commerce + other), `spend_per_card_inr`, `txns_per_card`, `avg_ticket_inr`, `ecom_share_of_spend`, `share_of_industry_spend`, `psi_credit_cards_outstanding` (cross-check) |
 | `mart_robinhood_kpis` | quarter end | funded customers, platform assets, net deposits, revenue by type (USD m), `revenue_parts_reconcile`, `includes_derived_q4`, `funded_customers_yoy`, `revenue_yoy`, `annualized_net_deposit_rate` |

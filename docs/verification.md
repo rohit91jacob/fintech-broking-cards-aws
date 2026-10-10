@@ -6,6 +6,15 @@ the RBI releases linked on its statistics pages (12 Payment System Indicators re
 September 2025 to August 2026, and 10 card-statistics releases, November 2025 to August 2026).
 "Pipeline" means the dbt marts built by `uv run fbc run`.
 
+**How the NSE and RBI files were obtained.** Those runs were made by an earlier version that
+sent a desktop Chrome User-Agent string to NSE and the RBI. Neither serves its files to a client
+that identifies itself honestly, and NSE's Terms of Use prohibit automated collection and the
+use of its data for simulation ([DATA_LICENSE.md](../DATA_LICENSE.md)). That code has been
+removed. Sections 2 to 5 are kept as the record of what the parsers and the ledger did on those
+files; the current code does not download them and cannot reproduce those figures. Section 1
+(SEC, which serves the declared User-Agent) was re-run on 10 October 2026 with the current code
+and gives the same figures; section 6 describes that run.
+
 ## 1. Robinhood KPIs and revenue vs the published earnings releases
 
 The pipeline reads KPIs from the 10-Q/10-K *Key Performance Metrics* table and revenue by type
@@ -95,9 +104,16 @@ transactions (24.51 billion), ₹29,82,356 crore, +22.5 % on August 2025.
 
 The 10 sessions in the window are the dates for which NSE serves a bhavcopy. 2 October 2026
 returned HTTP 404: it is Gandhi Jayanti, a trading holiday, and T+1 settlement of the
-1 October trades correctly moved to 5 October (`assert_settlement_is_t_plus_1`). The NSE
-holiday calendar itself was not downloaded for this check (NSE's website timed out), so the
-holiday is confirmed only by the missing file.
+1 October trades correctly moved to 5 October (`assert_settlement_is_t_plus_1`).
+
+The NSE holiday calendar has since been committed (`fbc/sources/nse_calendar.py`): NSE's own
+published trading holidays for 2024-2026, read from Internet Archive copies of its
+`holiday-master` endpoint because nseindia.com does not answer this client. It lists
+2 October 2026 (Mahatma Gandhi Jayanti), so the missing file and the published list agree, and
+`expected_sessions(date(2026, 10, 9), 10)` returns exactly the 10 sessions of that window
+(`tests/unit/test_nse_calendar.py`). The raw gate now requires every session the calendar
+expects in the requested window (`nse_trading_days`, error, exit 3); before, it passed with 2
+of 10.
 
 ## 4. The simulated ledger
 
@@ -127,5 +143,21 @@ WARN=0 ERROR=0, and the same UPI, card and Robinhood headline numbers. The Q2 20
 Q4 2025 earnings releases were re-read directly from EDGAR for that review (funded customers
 28.4 M, platform assets $369 B, net deposits $21.7 B, revenue $776 M / $389 M / $143 M =
 $1,308 M; Q4 2025 platform assets $324 B against the 10-K's $322.1 B). That run took about
-33 minutes because it shared the machine with the test suite; the 651 s quoted in the README
-is from an unloaded run.
+33 minutes because it shared the machine with the test suite; a 651 s unloaded run of that
+version was quoted in the README at the time.
+
+## 6. Current code, 10 October 2026
+
+`uv run fbc run --report site` from an empty data directory with the default settings (seed
+20261009, 10 sessions requested, 400 customers, 1,000 cards):
+
+| Step | Result |
+|---|---|
+| SEC EDGAR | Served; 14 files. Every Robinhood figure in section 1 is unchanged (Q2 2026: 28.4 M, $368.7 B, $21.7 B, $1,308 M; Q4 2025: $322.1 B platform assets). |
+| NSE | Not contacted (`FBC_NSE_DOWNLOAD=0`); no files in the raw directory, so the committed synthetic bhavcopies were used: 28 September to 1 October 2026, 4 sessions. Raw gate: `4 of 4 expected sessions 2026-09-28..2026-10-01; missing none`. |
+| RBI | Listing page served; the first workbook came back as the JavaScript challenge page four times, so RBI was skipped (`refused` in the `fetch` block) and the synthetic workbooks were used. |
+| Raw gate | 11 error checks passed; 1 of 4 warnings (`hood_revenue_parts_all_quarters`, Q3 2022, as in section 1) |
+| Simulated ledger | 2,543 posted, 17 rejected, 81 replays, 1 key conflict; 500 records re-delivered; Firehose landed 9,539 leg rows and 2,648 event rows, 9,127 and 2,560 after the merge; 39 Python reconciliation checks and 32 dbt reconciliation rows all OK |
+| dbt | PASS=78 WARN=1 ERROR=0; the warning is `assert_rbi_cards_cross_publication` (3 rows), expected on the independently generated synthetic workbooks (tests/fixtures/README.md) |
+| Site | `sources`: SEC real, NSE synthetic, RBI synthetic; the UPI, card and price figures carry "synthetic fixture" labels |
+| Time | 143 s end to end on a laptop |

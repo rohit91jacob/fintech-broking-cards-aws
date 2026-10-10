@@ -93,11 +93,12 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 
 def cmd_dq(args: argparse.Namespace) -> int:
     from fbc.lake import iceberg
+    from fbc.pipeline import raw_quality
     from fbc.quality import checks
 
     settings = _settings(args)
     cat = iceberg.get_catalog(settings)
-    results = checks.raw_checks(cat, min_trading_days=min(settings.trading_days, 2))
+    results = raw_quality(settings)
     if iceberg.table_exists(cat, "recon_results"):
         recon = iceberg.read(cat, "recon_results").to_pylist()
         results += checks.lake_checks(cat, bool(recon) and all(r["status"] == "OK" for r in recon))

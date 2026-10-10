@@ -65,6 +65,10 @@ def test_pipeline_end_to_end_and_rerun(fixture_settings, tmp_path, monkeypatch):
     assert summary["hood_funded_customers_m"] == 28.4
     html = site.read_text(encoding="utf-8")
     assert "simulated" in html and "SYN" not in html.split("<footer>")[0][:200]
+    # The fixtures are synthetic NSE/RBI layouts: the site must not present them as real data.
+    assert summary["sources"] == {"sec": "real", "nse": "synthetic", "rbi": "synthetic"}
+    assert "not NSE data" in html and "not RBI data" in html
+    assert "real · RBI" not in html and "real NSE closes" not in html
 
     fingerprint = _mart_fingerprint(s.duckdb_path)
     assert all(

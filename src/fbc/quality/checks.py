@@ -18,6 +18,7 @@ import pyarrow as pa
 from pyiceberg.catalog import Catalog
 
 from fbc.lake import iceberg
+from fbc.sources import nse_calendar
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,14 @@ def _one(con: duckdb.DuckDBPyConnection, sql: str) -> object:
     return row[0] if row else None
 
 
-def raw_checks(cat: Catalog, min_trading_days: int, today: date | None = None) -> list[CheckResult]:
+def raw_checks(
+    cat: Catalog,
+    trading_days: int,
+    session_tolerance: int = 0,
+    today: date | None = None,
+) -> list[CheckResult]:
+    """``trading_days`` is the requested NSE window: the gate fails (error) when more than
+    ``session_tolerance`` of the sessions the NSE calendar expects in it are missing."""
     today = today or date.today()
     t = {
         name: iceberg.read(cat, name)
@@ -102,8 +110,30 @@ def raw_checks(cat: Catalog, min_trading_days: int, today: date | None = None) -
         age = (today - k[3]).days
         add("hood_kpis_fresh", age <= 200, f"latest period {k[3]} is {age} days old", "warn")
 
-    days = _one(con, "select count(distinct trade_date) from raw_nse_bhavcopy")
-    add("nse_trading_days", days >= min_trading_days, f"{days} sessions (need {min_trading_days})")
+    # The window ends at the latest session loaded; every session the calendar expects in it
+    # must be there, so a partial download (2 of 10 days) or a hole in the middle fails.
+    sql = "select distinct trade_date from raw_nse_bhavcopy order by 1"
+    loaded = [r[0] for r in con.execute(sql).fetchall()]
+    if loaded:
+        expected = nse_calendar.expected_sessions(loaded[-1], trading_days, observed=loaded)
+        missing = sorted(set(expected) - set(loaded))
+        add(
+            "nse_trading_days",
+            len(missing) <= session_tolerance,
+            f"{trading_days - len(missing)} of {trading_days} expected sessions "
+            f"{expected[0]}..{expected[-1]}; missing {[str(d) for d in missing] or 'none'} "
+            f"(tolerance {session_tolerance})",
+        )
+        uncovered = nse_calendar.uncovered_years(expected)
+        add(
+            "nse_holiday_calendar_covers_window",
+            not uncovered,
+            f"holiday list covers {sorted(nse_calendar.COVERED_YEARS)}; "
+            f"weekdays assumed to be sessions in {uncovered or 'none'}",
+            "warn",
+        )
+    else:
+        add("nse_trading_days", False, f"0 sessions loaded (need {trading_days})")
     dup = _one(
         con,
         "select count(*) from (select trade_date, symbol, series from raw_nse_bhavcopy group by all having count(*) > 1)",

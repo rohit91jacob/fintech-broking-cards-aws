@@ -1,7 +1,9 @@
 """Static results site (``fbc report --out site``) built from the dbt marts and run summaries.
 
 Published content is limited to aggregates: no raw NSE prices and no RBI tables are
-reproduced, only derived figures with attribution. Everything simulated is labelled.
+reproduced, only derived figures with attribution. Everything simulated is labelled, and so is
+every figure built from the committed synthetic NSE/RBI fixtures (the ingest manifest says
+which sources those were).
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from typing import Any
 import duckdb
 
 from fbc.config import Settings
+from fbc.ingest import read_manifest
 
 BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"
 SERIES = [BLUE, ORANGE, AQUA]
@@ -239,6 +242,21 @@ def build_site(settings: Settings, out_dir: Path) -> Path:
     )
     recon_ok = all(r["n"] == r["ok"] for r in recon)
     built = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    sources = read_manifest(settings).get("sources", {})
+    nse_syn = bool(sources.get("nse", {}).get("synthetic"))
+    rbi_syn = bool(sources.get("rbi", {}).get("synthetic"))
+    rbi_badge = "synthetic fixture · not RBI data" if rbi_syn else "real · RBI"
+    rbi_note = "SYNTHETIC fixture, not RBI data" if rbi_syn else ""
+    real = ["SEC EDGAR"] + ([] if nse_syn else ["NSE"]) + ([] if rbi_syn else ["RBI"])
+    synthetic = (["NSE-layout prices"] if nse_syn else []) + (
+        ["RBI-layout payment statistics"] if rbi_syn else []
+    )
+    intro = f"Built {built}. Real public data ({', '.join(real)})"
+    if synthetic:
+        intro += (
+            f", <strong>synthetic</strong> {' and '.join(synthetic)} (committed test fixtures "
+            "used in place of NSE/RBI downloads; see DATA_LICENSE.md for why)"
+        )
     summary = {
         "built_at": built,
         "upi_latest_month": str(lu["period_month"]),
@@ -250,6 +268,11 @@ def build_site(settings: Settings, out_dir: Path) -> Path:
         "hood_latest_quarter": str(lh["period_end"]),
         "hood_funded_customers_m": lh["funded_customers_m"],
         "hood_platform_assets_bn": lh["platform_assets_bn"],
+        "sources": {
+            "sec": "real",
+            "nse": "synthetic" if nse_syn else "real",
+            "rbi": "synthetic" if rbi_syn else "real",
+        },
         "simulation_window": sim["window"],
         "simulated_postings": sim["ledger"].get("posted", 0),
         "simulated_rejections": sim["ledger"].get("rejected", 0),
@@ -262,23 +285,25 @@ def build_site(settings: Settings, out_dir: Path) -> Path:
         "<title>Fintech broking + cards ledger on AWS (emulated): results</title>",
         f"<style>{CSS}</style></head><body><main>",
         "<h1>Broking + cards: event-driven ledger results</h1>",
-        f"<p class='muted'>Built {built}. Real public data (SEC EDGAR, NSE, RBI) plus a <strong>simulated</strong>, seeded event stream "
+        f"<p class='muted'>{intro} plus a <strong>simulated</strong>, seeded event stream "
         "run through an emulated AWS pipeline (DynamoDB, Streams, Lambda, Firehose, S3/Iceberg, dbt). No real AWS account is used.</p>",
         "<div class='tiles'>",
         _tile(
             "UPI transactions, " + lu["period_month"].strftime("%b %Y"),
             f"{lu['volume_mn'] / 1000:,.2f} bn",
-            f"{_pct(lu['volume_yoy'])} YoY · RBI PSI",
+            f"{_pct(lu['volume_yoy'])} YoY · {rbi_note or 'RBI PSI'}",
         ),
         _tile(
             "Credit cards outstanding, " + lc["period_month"].strftime("%b %Y"),
             f"{lc['credit_cards_outstanding'] / 1e6:,.1f} M",
-            "RBI card statistics",
+            rbi_note or "RBI card statistics",
         ),
         _tile(
             "Credit-card spend per card",
             f"₹{lc['spend_per_card_inr']:,.0f}",
-            lc["period_month"].strftime("%b %Y") + " · per month",
+            lc["period_month"].strftime("%b %Y")
+            + " · per month"
+            + (f" · {rbi_note}" if rbi_syn else ""),
         ),
         _tile(
             "Robinhood funded customers",
@@ -291,7 +316,7 @@ def build_site(settings: Settings, out_dir: Path) -> Path:
             f"{sum(r['n'] for r in recon)} checks · simulated ledger",
         ),
         "</div>",
-        "<h2>UPI growth by month <span class='badge'>real · RBI</span></h2>",
+        f"<h2>UPI growth by month <span class='badge'>{rbi_badge}</span></h2>",
         _line_chart(
             [(r["period_month"].strftime("%b %y"), r["volume_mn"]) for r in upi],
             "UPI transactions per month (million)",
@@ -308,7 +333,7 @@ def build_site(settings: Settings, out_dir: Path) -> Path:
                 ("volume_yoy", "YoY", "pct"),
             ],
         ),
-        "<h2>Credit-card spend per card <span class='badge'>real · RBI</span></h2>",
+        f"<h2>Credit-card spend per card <span class='badge'>{rbi_badge}</span></h2>",
         _line_chart(
             [(r["period_month"].strftime("%b %y"), r["spend_per_card_inr"]) for r in cards],
             "Spend per credit card per month, all banks (₹)",
@@ -355,9 +380,18 @@ def build_site(settings: Settings, out_dir: Path) -> Path:
                 ("revenue_yoy", "Revenue YoY", "pct"),
             ],
         ),
-        "<h2>Simulated broking book <span class='badge'>simulated · priced at real NSE closes</span></h2>",
-        f"<p class='muted'>{sim['customers']} simulated customers trading {sim['universe']} of the most-traded NSE stocks, "
-        f"{sim['window'][0]} to {sim['window'][1]} ({sim['trading_days']} sessions). Fills at the real daily VWAP; brokerage is an assumption.</p>",
+        "<h2>Simulated broking book <span class='badge'>simulated · "
+        + ("priced at synthetic prices, not NSE data" if nse_syn else "priced at real NSE closes")
+        + "</span></h2>",
+        f"<p class='muted'>{sim['customers']} simulated customers trading {sim['universe']} "
+        + (
+            "synthetic stocks (NSE bhavcopy layout, no NSE data), "
+            if nse_syn
+            else "of the most-traded NSE stocks, "
+        )
+        + f"{sim['window'][0]} to {sim['window'][1]} ({sim['trading_days']} sessions). Fills at the "
+        + ("synthetic" if nse_syn else "real")
+        + " daily VWAP; brokerage is an assumption.</p>",
         _line_chart(
             [(str(r["as_of_date"])[5:], float(r["mv"])) for r in book],
             "Book market value at the close (₹)",
@@ -405,7 +439,9 @@ def build_site(settings: Settings, out_dir: Path) -> Path:
                 ("recall", "Recall", "share"),
             ],
         ).replace("<details>", "<details open>"),
-        "<h2>Calibration: simulated card spend vs RBI <span class='badge'>simulated vs real</span></h2>",
+        "<h2>Calibration: simulated card spend vs RBI <span class='badge'>"
+        + ("simulated vs synthetic fixture" if rbi_syn else "simulated vs real")
+        + "</span></h2>",
         _table(
             calib,
             [
@@ -431,9 +467,20 @@ def build_site(settings: Settings, out_dir: Path) -> Path:
         f"<p class='muted'>Event pipeline counters: {sim['ledger'].get('posted', 0):,} postings, {sim['ledger'].get('rejected', 0):,} rejected by ledger constraints, "
         f"{sim['ledger'].get('replayed', 0):,} idempotent replays, {sim['ledger'].get('conflict', 0):,} key conflicts; "
         f"{sim['stream'].get('redelivered_records', 0):,} stream records redelivered and de-duplicated in Iceberg.</p>",
-        "<footer>Sources: U.S. SEC EDGAR (public domain); Reserve Bank of India, Payment System Indicators and ATM/POS/Card Statistics "
-        "(derived figures, with attribution; see DATA_LICENSE.md); National Stock Exchange of India bhavcopy, used only to price simulated trades "
-        "(not redistributed). Customer orders, card transactions, balances and fraud labels are simulated. "
+        "<footer>Sources: U.S. SEC EDGAR (public domain); "
+        + (
+            "RBI-layout payment statistics: synthetic test fixtures, not RBI data; "
+            if rbi_syn
+            else "Reserve Bank of India, Payment System Indicators and ATM/POS/Card Statistics "
+            "(derived figures, with attribution; see DATA_LICENSE.md); "
+        )
+        + (
+            "share prices: synthetic test fixtures in the NSE bhavcopy layout, not NSE data. "
+            if nse_syn
+            else "National Stock Exchange of India bhavcopy, used only to price simulated trades "
+            "(not redistributed). "
+        )
+        + "Customer orders, card transactions, balances and fraud labels are simulated. "
         "Code: MIT. Not investment advice; no affiliation with any company named.</footer>",
         "</main></body></html>",
     ]

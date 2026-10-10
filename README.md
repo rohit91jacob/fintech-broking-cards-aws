@@ -18,30 +18,41 @@ Streams -> Lambda -> Kinesis Data Firehose -> S3 / Apache Iceberg -> dbt (DuckDB
 Athena compiled in CI)**, with a reconciliation job proving that ledger balances equal positions,
 T+1 settlement, card-fraud rules, and Terraform for the whole stack.
 
-* **Real data.** Robinhood's KPIs and revenue by type from **SEC EDGAR** XBRL and filings;
-  **NSE India** end-of-day prices; **RBI** payment statistics (UPI volumes and values, credit
-  cards outstanding, card spend by bank). All downloaded at run time.
+* **Real data where the source allows it.** Robinhood's KPIs and revenue by type from
+  **SEC EDGAR** XBRL and filings, downloaded at run time. **NSE** end-of-day prices and **RBI**
+  payment statistics (UPI, credit cards outstanding, card spend by bank) are parsed in their
+  published file layouts, but neither site serves its files to a client that identifies itself
+  honestly, and NSE's Terms of Use prohibit automated collection and the use of its data for
+  simulation. The pipeline does not pose as a browser: the NSE download is off by default, a
+  refused RBI download is skipped, and both fall back to files already in the raw directory or
+  the committed **synthetic** fixtures, which the results site labels as such. See
+  [DATA_LICENSE.md](DATA_LICENSE.md#automated-access-what-the-sources-do-with-an-honest-user-agent).
 * **Simulated activity, clearly labelled.** Customer orders and card swipes are not public, so
-  a seeded simulator generates them: fills at the real NSE daily VWAP, card spending sized from
-  RBI averages. Every simulated row carries `simulated = true`.
+  a seeded simulator generates them: fills at the daily VWAP of the bhavcopy table, card
+  spending sized from the RBI table's averages. Every simulated row carries `simulated = true`.
 * **Emulated cloud, real code paths.** Every AWS call is a real `boto3` call. Locally and in
   tests it runs on [moto](https://github.com/getmoto/moto) in-process; a CI job runs the same
   code over HTTP against LocalStack (or moto's server). **No AWS account is used anywhere.**
   The Terraform is validated (`fmt`, `validate`, `tflint`, `checkov`), not deployed.
 * **Proof.** Robinhood figures match the published earnings releases for every compared metric
   but one (a $322.1 B vs $324 B platform-assets difference between the 10-K and the release);
-  two RBI publications agree for 9 of 10 months; the ledger reconciles on 39 + 32 checks. See
-  [docs/verification.md](docs/verification.md).
+  the ledger reconciles on 39 + 32 checks; the raw gate fails a run whose NSE window is missing
+  any session the exchange calendar expects. See [docs/verification.md](docs/verification.md).
 
-## Results (run of 9 October 2026)
+## Results (run of 10 October 2026)
 
 | | |
 |---|---|
-| UPI, August 2026 (RBI) | **24.51 bn** transactions, ₹29.8 lakh crore, **+22.5 %** year on year |
-| Credit cards outstanding, August 2026 (RBI) | **124.1 M**; spend per card **₹16,319** a month |
 | Robinhood, Q2 2026 (SEC 10-Q) | **28.4 M** funded customers, **$368.7 B** platform assets, **$21.7 B** net deposits, **$1,308 M** revenue |
-| Simulated ledger, 25 Sep - 9 Oct 2026 | **7,747** postings, **42** rejected by ledger constraints, **254** idempotent replays, **1,500** stream records redelivered and de-duplicated; reconciliation **OK** |
-| Full real-data run (`fbc run`, laptop) | 651 s end to end (ingest about 4 min, simulation 6 min, dbt and site the rest); `dbt build` on that lake: PASS=79, WARN=0, ERROR=0 |
+| NSE and RBI | **Not downloaded.** The NSE download is off (Terms of Use); the RBI's document server answered with a bot challenge. The run used the synthetic fixtures, so the site's UPI, card and price figures are marked synthetic. |
+| Simulated ledger, 28 Sep - 1 Oct 2026 (the fixtures' 4 sessions, synthetic prices) | **2,543** postings, **17** rejected by ledger constraints, **81** idempotent replays, **500** stream records redelivered and de-duplicated; reconciliation **OK** (39 + 32 checks) |
+| Full run (`fbc run`, laptop) | 143 s end to end (ingest about 40 s, simulation 86 s, dbt and site the rest); `dbt build`: PASS=78, WARN=1 (`assert_rbi_cards_cross_publication`, expected on the independently generated synthetic workbooks), ERROR=0 |
+
+The UPI and card figures this table showed before (UPI August 2026: 24.51 bn transactions;
+124.1 M credit cards) came from the 9 October run of an earlier version that sent a browser
+User-Agent to NSE and the RBI. That code is gone; those figures stay in
+[docs/verification.md](docs/verification.md) as the record of the parser checks, and this code
+cannot reproduce them.
 
 The [results site](https://rohit91jacob.github.io/fintech-broking-cards-aws/) is rebuilt every
 weekday evening (IST) by [`refresh.yml`](.github/workflows/refresh.yml).
@@ -50,10 +61,10 @@ weekday evening (IST) by [`refresh.yml`](.github/workflows/refresh.yml).
 
 ```mermaid
 flowchart LR
-  subgraph real["Real public data (downloaded at run time)"]
-    SEC["SEC EDGAR<br/>companyfacts + 10-Q/10-K"]
-    NSE["NSE bhavcopy<br/>(EOD prices)"]
-    RBI["RBI PSI +<br/>card statistics"]
+  subgraph real["Public sources"]
+    SEC["SEC EDGAR<br/>companyfacts + 10-Q/10-K<br/>(downloaded)"]
+    NSE["NSE bhavcopy layout<br/>(synthetic; download off)"]
+    RBI["RBI PSI + card statistics<br/>(synthetic when refused)"]
   end
   subgraph sim["Simulated, seeded"]
     PROD["Producer<br/>orders, deposits,<br/>card auths, bill pay"]
@@ -83,7 +94,7 @@ flowchart LR
 
 | Component | What it does | Code |
 |---|---|---|
-| Sources | SEC companyfacts, XBRL instances (revenue on `srt:ProductOrServiceAxis`), KPI tables; NSE UDiFF bhavcopy; RBI PSI and bank-wise card statistics | `src/fbc/sources/` |
+| Sources | SEC companyfacts, XBRL instances (revenue on `srt:ProductOrServiceAxis`), KPI tables; NSE UDiFF bhavcopy and trading calendar; RBI PSI and bank-wise card statistics. Requests carry a descriptive User-Agent; a source that refuses it is skipped (`Refused`), never retried in disguise. | `src/fbc/sources/`, `src/fbc/http.py` |
 | Ledger API | API Gateway-style Lambda handler: deposits, orders, T+1 settlements, card authorisations, bill payments, balance reads | `src/fbc/ledger/api.py` |
 | Ledger service | One `TransactWriteItems` per posting: idempotency record (`attribute_not_exists`), journal header + legs, `ADD balance` with conditions (no overdraft, no short sale, credit limit). Replays, rejections and key conflicts are distinguished from the cancellation reasons; transient cancellations (transaction conflicts, throttling) return 503 and write nothing, so a retry with the same key is processed normally. | `src/fbc/ledger/service.py`, `model.py` |
 | Stream processor | Lambda for DynamoDB Streams: headers -> business events, legs -> ledger entries, `PutRecordBatch` to two Firehose streams, partial batch failures | `src/fbc/ledger/stream.py` |
@@ -91,7 +102,7 @@ flowchart LR
 | Iceberg sink | Plays Firehose's Iceberg destination: lands S3 JSON lines into Iceberg, partitioned by `business_date`, merged on `(txn_id, leg_no)` / `txn_id` | `src/fbc/lake/sink.py`, `iceberg.py` |
 | Simulator | Seeded customers, cards, orders, card swipes, retries, conflicting keys and four fraud scenarios | `src/fbc/sim/` |
 | Reconciliation | Trial balance, DynamoDB vs Iceberg, positions, customer cash, clearing obligations, card balances, constraints | `src/fbc/recon.py` |
-| Data quality | Raw gate (11 error + 3 warn checks) after ingest, lake gate (7 checks) after the pipeline, 55 dbt tests on the models | `src/fbc/quality/checks.py`, `dbt/` |
+| Data quality | Raw gate (11 error + 4 warn checks) after ingest, including a complete NSE window: every session the NSE calendar expects in the requested window, `FBC_NSE_SESSION_TOLERANCE` (default 0) missing at most; lake gate (7 checks) after the pipeline; 55 dbt tests on the models | `src/fbc/quality/checks.py`, `dbt/` |
 | dbt | staging -> intermediate -> marts, DuckDB over Iceberg locally, Athena target compiled in CI | `dbt/` |
 | Infrastructure | Terraform modules: KMS, DynamoDB, S3 + Glue + Iceberg tables, Firehose (Iceberg destination), Lambda + API Gateway + DLQ, Athena, budgets and alarms, GitHub OIDC | `infra/terraform/` |
 | Site | Static HTML with inline SVG charts and table views | `src/fbc/report.py` |
@@ -113,18 +124,20 @@ flowchart LR
 
 | Source | What | Licence / terms | Refresh cadence | Known gaps |
 |---|---|---|---|---|
-| [SEC EDGAR](https://www.sec.gov/edgar/search/) companyfacts + submissions APIs, 10-Q/10-K XBRL instances and HTML | Robinhood (HOOD, CIK 1783879): revenues, revenue by type, funded customers, platform assets (AUC), net deposits, ARPU, Gold subscribers | Public; descriptive User-Agent required, <= 10 req/s | Quarterly filings; fetched on every refresh (filings cached) | Quarterly KPIs start in Q1 2024 (older 10-Q layout not parsed); Q3 2022 revenue split does not add up (old XBRL member); Q4 values derived from the 10-K |
-| [NSE](https://www.nseindia.com/) capital-market bhavcopy (UDiFF, July 2024 onwards) | Daily OHLC, volume, turnover per stock | Not licensed for redistribution: downloaded at run time, never committed or published | Every trading day (evening IST); refresh runs 20:00 IST Mon-Fri | UDiFF only (older format not parsed); prices only for the 30 most-traded EQ stocks are used |
-| [RBI](https://www.rbi.org.in/) Payment System Indicators | UPI, IMPS, NEFT, card payments (volume, value), cards outstanding, payment frauds | RBI website terms: no caching/framing without permission; files used at run time only, derived figures published with attribution | Monthly (about 4-6 weeks after month end) | Only the ~12 releases linked on the page are fetched (no archive crawl) |
-| RBI ATM, Acceptance Infrastructure and Card Statistics | Bank-wise credit cards outstanding and credit/debit card spend | As above | Monthly | 10 months linked at the time of the run |
+| [SEC EDGAR](https://www.sec.gov/edgar/search/) companyfacts + submissions APIs, 10-Q/10-K XBRL instances and HTML | Robinhood (HOOD, CIK 1783879): revenues, revenue by type, funded customers, platform assets (AUC), net deposits, ARPU, Gold subscribers | Public; descriptive User-Agent with a contact e-mail required, <= 10 req/s | Quarterly filings; fetched on every refresh (filings cached) | Quarterly KPIs start in Q1 2024 (older 10-Q layout not parsed); Q3 2022 revenue split does not add up (old XBRL member); Q4 values derived from the 10-K |
+| [NSE](https://www.nseindia.com/) capital-market bhavcopy (UDiFF, July 2024 onwards) | Daily OHLC, volume, turnover per stock | Terms of Use prohibit automated data collection and any use of the data for simulation; not licensed for redistribution. **Download off by default** (`FBC_NSE_DOWNLOAD`); the synthetic fixtures are used | (n/a by default) | The archive does not answer non-browser clients (requests time out); UDiFF only; prices only for the 30 most-traded EQ stocks are used |
+| [RBI](https://www.rbi.org.in/) Payment System Indicators | UPI, IMPS, NEFT, card payments (volume, value), cards outstanding, payment frauds | RBI website terms: no caching/framing without permission; derived figures published with attribution | Monthly (about 4-6 weeks after month end) | Listing pages are served, but the workbooks come back as a bot challenge to automated clients, so the source is skipped and the synthetic fixtures are used unless the workbooks are already in `raw/rbi/` |
+| RBI ATM, Acceptance Infrastructure and Card Statistics | Bank-wise credit cards outstanding and credit/debit card spend | As above | Monthly | As above |
 | NPCI UPI product statistics | (not used) | | | Blocked for automated clients (HTTP 403); UPI comes from the RBI series |
 
 Details and attribution: [DATA_LICENSE.md](DATA_LICENSE.md).
 
 ## Data model
 
-* **Raw (real):** `lake.raw_sec_companyfacts`, `raw_hood_revenue_by_type`, `raw_hood_kpis`,
-  `raw_nse_bhavcopy` (partitioned by trade date), `raw_rbi_psi`, `raw_rbi_card_stats`.
+* **Raw:** `lake.raw_sec_companyfacts`, `raw_hood_revenue_by_type`, `raw_hood_kpis` (real),
+  `raw_nse_bhavcopy` (partitioned by trade date), `raw_rbi_psi`, `raw_rbi_card_stats` (real only
+  when their files are in the raw directory; otherwise the synthetic fixtures, recorded in
+  `runs/ingest_manifest.json`).
 * **Ledger (simulated):** `lake.business_events` (one row per request outcome) and
   `lake.ledger_entries` (one row per leg), both partitioned by `business_date`;
   `ledger_balances_snapshot`, `recon_results`, `sim_customers`, `sim_cards`.
@@ -152,7 +165,8 @@ cp .env.example .env              # optional; set FBC_SEC_USER_AGENT to your nam
 # Offline, on the committed fixtures (about 3 minutes):
 make run-fixtures                 # -> site-fixtures/index.html
 
-# Real data (downloads about 60 MB; 10-15 minutes on a laptop):
+# Live sources (downloads about 55 MB from SEC EDGAR; NSE and RBI come from the raw directory
+# or, when they have no files there, the synthetic fixtures; about 3 minutes on a laptop):
 make run                          # ingest -> simulate -> dbt build -> site/
 make reconcile                    # print the reconciliation; exit 4 on any break
 
@@ -200,10 +214,18 @@ lifecycle rules on every bucket. These are estimates, not measured bills.
 * **The simulation is a model.** Brokerage is min(₹20, 0.03 %), statutory charges are not
   modelled, only settled shares can be sold, there are no corporate actions, and the fraud
   rules are scored against the simulator's own labels.
-* **Speed.** The default run (about 7,800 postings) takes several minutes because moto
-  serialises every request; real DynamoDB would not be the bottleneck.
-* **Sources.** NPCI is not used (blocked); the RBI history is limited to the releases the
-  listing pages link to; Robinhood quarterly KPIs start in Q1 2024.
+* **Speed.** The default run (about 2,500 postings over the fixtures' 4 sessions) takes a
+  couple of minutes because moto serialises every request; real DynamoDB would not be the
+  bottleneck.
+* **Sources.** Only SEC EDGAR is downloaded by default. NSE's Terms of Use prohibit automated
+  collection and the use of its data for simulation, and its archive does not answer an honestly
+  identified client, so the broking book is priced at synthetic prices. The RBI's document server
+  answers automated clients with a bot challenge, so the UPI and card figures are synthetic unless
+  the RBI workbooks are already in `raw/rbi/`. The project does not disguise its client to get
+  around either. NPCI is not used (blocked); Robinhood quarterly KPIs start in Q1 2024.
+* **Holiday list.** The NSE trading calendar covers 2024-2026 (NSE's published holidays). A
+  window in a later year assumes every weekday is a session (the raw gate warns), and a holiday
+  NSE declares at short notice fails the gate until it is added to `fbc/sources/nse_calendar.py`.
 
 ## Project structure
 
@@ -212,8 +234,8 @@ src/fbc/            cli, config, http, ingest, pipeline, recon, report, lambdas
   aws/              boto3 clients, emulator backend, resource creation, moto shim
   ledger/           model (postings, legs), service (DynamoDB), api, stream (Lambda + poller)
   lake/             iceberg helpers, Firehose-to-Iceberg sink
-  sim/              calibration from real data, seeded producer
-  sources/          sec, nse, rbi
+  sim/              calibration from the raw tables, seeded producer
+  sources/          sec, nse (+ nse_calendar), rbi
   quality/          data-quality gates
 dbt/                staging / intermediate / marts, tests, profiles (dev, ci, athena)
 infra/terraform/    root module + modules/{kms,ledger,lake,streaming,compute,analytics,guardrails,ci_oidc}

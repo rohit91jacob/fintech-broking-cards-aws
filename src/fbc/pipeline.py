@@ -19,7 +19,7 @@ from typing import Any
 from fbc.aws.clients import Aws, aws_backend
 from fbc.aws.resources import ensure_resources
 from fbc.config import Settings
-from fbc.ingest import fetch_all, load_all
+from fbc.ingest import fetch_all, load_all, read_manifest
 from fbc.lake import iceberg
 from fbc.lake.sink import sink, wait_for_landing
 from fbc.ledger.api import LedgerApi
@@ -36,14 +36,28 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DBT_DIR = PROJECT_ROOT / "dbt"
 
 
+def raw_quality(settings: Settings) -> list[checks.CheckResult]:
+    """Raw checks against the window the last ingest asked for (see ``ingest.load_all``)."""
+    required = read_manifest(settings).get("nse_sessions_required", settings.trading_days)
+    return checks.raw_checks(
+        iceberg.get_catalog(settings),
+        trading_days=required,
+        session_tolerance=settings.nse_session_tolerance,
+    )
+
+
 def ingest(settings: Settings, *, offline: bool = False) -> dict[str, Any]:
     status = {} if offline else fetch_all(settings)
     rows = load_all(settings)
-    cat = iceberg.get_catalog(settings)
-    results = checks.raw_checks(cat, min_trading_days=min(settings.trading_days, 2))
+    results = raw_quality(settings)
     checks.write_report(results, settings.run_dir / "dq_raw.json")
     checks.gate(results)
-    return {"fetch": status, "rows": rows, "dq": checks.summarize(results)}
+    return {
+        "fetch": status,
+        "rows": rows,
+        "sources": read_manifest(settings).get("sources", {}),
+        "dq": checks.summarize(results),
+    }
 
 
 def simulate(settings: Settings) -> dict[str, Any]:

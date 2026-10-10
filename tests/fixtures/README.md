@@ -1,7 +1,10 @@
 # Test fixtures
 
 `raw/` mirrors the layout of the pipeline's raw download directory, so tests copy it into a
-temporary `FBC_DATA_DIR/raw` and run `fbc ingest --offline`.
+temporary `FBC_DATA_DIR/raw` and run `fbc ingest --offline`. Ordinary runs use `raw/nse/` and
+`raw/rbi/` too, whenever the data directory has no NSE or RBI files (the NSE download is off and
+the RBI refuses automated clients; see DATA_LICENSE.md). The NSE window is then capped at
+their 4 sessions, and the results site labels everything built from them as synthetic.
 
 | Path | Real or synthetic | Why |
 |---|---|---|

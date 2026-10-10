@@ -5,8 +5,8 @@
 | Code | Meaning | First thing to check |
 |---|---|---|
 | 0 | OK | |
-| 2 | A source file is missing (no SEC companyfacts, no NSE bhavcopy, no RBI workbook) | The `fetch` block printed by `fbc ingest`; `$FBC_DATA_DIR/raw/` |
-| 3 | A data-quality gate failed (error severity) | `$FBC_DATA_DIR/runs/dq_raw.json` or `dq_lake.json` |
+| 2 | A source file is missing: no SEC companyfacts, or no NSE/RBI files in the raw directory *and* none in `FBC_FIXTURE_DIR` | The `fetch` block printed by `fbc ingest`; `$FBC_DATA_DIR/raw/` |
+| 3 | A data-quality gate failed (error severity), e.g. `nse_trading_days`: sessions missing from the requested NSE window | `$FBC_DATA_DIR/runs/dq_raw.json` or `dq_lake.json` |
 | 4 | Reconciliation break | `fbc reconcile`; `runs/simulation_summary.json` -> `reconciliation` |
 | 5 | `dbt build` failed | `dbt/logs/dbt.log`, the failing model or test in the output |
 
@@ -30,13 +30,30 @@ The `refresh` workflow opens (or comments on) an issue titled "Scheduled refresh
 2. **Ingest, exit 2 / HTTP errors.**
    * **SEC 403** "Undeclared Automated Tool": SEC rejected the User-Agent. Set the repository
      variable `SEC_USER_AGENT` to `"<your name or project> <your e-mail>"`.
-   * **NSE 403 / timeouts**: NSE throttles some cloud IP ranges. Past bhavcopies are reused
-     from the Actions cache, so the job only fails if *no* recent file can be found. Re-run
-     later; if it persists, run `fbc ingest` locally and inspect `raw/nse/`.
-   * **RBI**: `rbidocs.rbi.org.in` sometimes serves a JavaScript challenge page instead of
-     the workbook. `fbc.http.fetch` rejects any payload that is not a ZIP (`PK` magic) and
-     retries; cached releases are reused.
+   * **NSE "download is off"** (warning, not an error): expected. NSE's Terms of Use prohibit
+     automated collection and the use of its data for simulation (DATA_LICENSE.md), so
+     `FBC_NSE_DOWNLOAD` defaults to 0 and the committed synthetic bhavcopies are used. Do not
+     switch it on without NSE's written permission. With it on, `nsearchives.nseindia.com`
+     does not answer non-browser clients: the first timeout raises `Refused` and NSE is
+     skipped (`"refused"` in the `fetch` block).
+   * **RBI `"refused"`** (warning, not an error): `rbidocs.rbi.org.in` answers automated
+     clients with a JavaScript challenge page instead of the workbook. `fbc.http.fetch` sees a
+     challenge page where a ZIP (`PK`) was expected, retries, then raises `Refused`; ingest
+     uses the workbooks already in `raw/rbi/` (none on a fresh runner) or the synthetic ones,
+     and the site marks the UPI and card figures as synthetic. Do not change the User-Agent
+     to a browser string to get past it.
 3. **Ingest, exit 3.** Read `dq_raw.json` in the run log. Typical causes:
+   * `nse_trading_days`: the NSE window does not hold every session the calendar expects
+     (`missing [...]` in the detail). The window is the requested `FBC_TRADING_DAYS` sessions
+     ending at the latest bhavcopy loaded; when NSE falls back to the committed fixtures it is
+     capped at the fixtures' own complete 4-session window. Causes, in order of likelihood:
+     a partial download (fewer files than requested), a failed day in the middle, or a day
+     NSE was closed that `fbc/sources/nse_calendar.py` does not list (an election or other
+     holiday declared at short notice). For the last one, add the date with NSE's description
+     from its holiday circular and re-run. `FBC_NSE_SESSION_TOLERANCE` (default 0) lets a run
+     pass with that many sessions missing; leave it at 0 for scheduled runs.
+   * `nse_holiday_calendar_covers_window` (warn): the window reaches a year with no holiday
+     list. Add NSE's list for that year (published in December) to `nse_calendar.py`.
    * `rbi_cards_banks_sum_to_total` / `LayoutError`: the RBI changed a workbook layout. Compare
      the new file with the column map in `fbc/sources/rbi.py` (`CARD_COLUMNS`, numbered header
      row) and update the parser and the synthetic fixture generator together.
@@ -76,9 +93,11 @@ uv run fbc run --offline --report site
 
 ## Changing the simulation
 
-`FBC_SEED`, `FBC_TRADING_DAYS`, `FBC_CUSTOMERS` and `FBC_CARDS` (see `.env.example`). The default
-size (10 sessions, 400 customers, 1,000 cards, about 7,800 postings) takes 5-10 minutes on a
-laptop; most of it is moto's per-request overhead. Fraud thresholds are dbt vars.
+`FBC_SEED`, `FBC_TRADING_DAYS`, `FBC_CUSTOMERS` and `FBC_CARDS` (see `.env.example`). When NSE
+falls back to the committed fixtures, the window is capped at their 4 sessions; when `raw/nse/`
+holds bhavcopies, the raw gate requires all `FBC_TRADING_DAYS` sessions. The default size (400
+customers, 1,000 cards, about 2,500 postings over the fixtures' 4 sessions) takes a couple of
+minutes on a laptop; most of it is moto's per-request overhead. Fraud thresholds are dbt vars.
 
 ## Credentials
 

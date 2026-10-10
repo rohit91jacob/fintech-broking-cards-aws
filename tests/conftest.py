@@ -17,7 +17,14 @@ FIXTURES = Path(__file__).parent / "fixtures" / "raw"
 
 @pytest.fixture
 def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
-    monkeypatch.delenv("FBC_AWS_ENDPOINT_URL", raising=False)
+    for name in (
+        "FBC_AWS_ENDPOINT_URL",
+        "FBC_USER_AGENT",
+        "FBC_NSE_DOWNLOAD",
+        "FBC_NSE_SESSION_TOLERANCE",
+        "FBC_FIXTURE_DIR",
+    ):
+        monkeypatch.delenv(name, raising=False)
     return Settings.from_env(
         data_dir=tmp_path / "data",
         trading_days=4,

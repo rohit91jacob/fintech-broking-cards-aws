@@ -1,11 +1,14 @@
 name: refresh
 
-# Weekday refresh of the results site. NSE publishes the day's bhavcopy in the evening (IST),
-# so the job runs at 14:30 UTC (20:00 IST) Monday to Friday. Each run downloads the latest
-# SEC filings, the last 10 NSE sessions and the latest RBI releases (all credential-free),
-# re-runs the seeded simulation over that window, rebuilds the marts and publishes the site.
-# The raw download directory is cached between runs: past bhavcopies and RBI releases are
-# immutable, so only new files are fetched.
+# Weekday refresh of the results site, 14:30 UTC (20:00 IST) Monday to Friday. Each run
+# downloads the latest SEC filings (credential-free), asks the RBI for its latest releases,
+# re-runs the seeded simulation, rebuilds the marts and publishes the site. NSE is not
+# downloaded (its Terms of Use prohibit automated collection and use for simulation) and the
+# RBI's document server refuses automated clients; both then come from the committed synthetic
+# fixtures, and the site labels them. Requests use an honest User-Agent, never a browser's.
+# The raw download directory is cached between runs (filings are immutable). The key prefix
+# is fbc-raw-v2-: caches made before the User-Agent change held NSE/RBI files fetched with a
+# browser User-Agent and must not be restored (delete the old fbc-raw-* caches).
 
 on:
   schedule:
@@ -42,17 +45,17 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.FBC_DATA_DIR }}/raw
-          key: fbc-raw-${{ github.run_id }}
-          restore-keys: fbc-raw-
+          key: fbc-raw-v2-${{ github.run_id }}
+          restore-keys: fbc-raw-v2-
       - run: uv sync
-      - name: Ingest (exit 2 = no usable source files, 3 = data-quality gate)
+      - name: Ingest (exit 2 = no usable source files, 3 = data-quality gate, e.g. NSE sessions missing)
         run: uv run fbc ingest
       - name: Save raw downloads for the next run
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.FBC_DATA_DIR }}/raw
-          key: fbc-raw-${{ github.run_id }}
+          key: fbc-raw-v2-${{ github.run_id }}
       - name: Simulate through the emulated AWS pipeline (exit 4 = reconciliation break)
         run: uv run fbc simulate
       - name: dbt build
