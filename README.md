@@ -117,7 +117,7 @@ flowchart LR
 | Query / transform | DuckDB 1.5.6, dbt-core 1.12, dbt-duckdb 1.11 (iceberg plugin), dbt-athena 1.11 (compile only) |
 | Files | pyarrow 26, openpyxl 3.1, requests 2.34 |
 | Infrastructure | Terraform 1.16, AWS provider ~> 6.68, tflint 0.64 + AWS ruleset 0.49, checkov |
-| Quality | pytest 9, ruff 0.16, pre-commit, gitleaks, actionlint |
+| Quality | pytest 9, ruff 0.16, pre-commit, gitleaks |
 | CI / scheduling | GitHub Actions, GitHub Pages |
 
 ## Design rationale
