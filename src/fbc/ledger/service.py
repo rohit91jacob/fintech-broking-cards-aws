@@ -135,7 +135,12 @@ class LedgerService:
                     self._journal_put(header),
                 ]
             )
-        except self.aws.ddb.exceptions.TransactionCanceledException:
+        except self.aws.ddb.exceptions.TransactionCanceledException as exc:
+            codes = _reason_codes(exc)
+            if any(code not in _DEFINITIVE_CODES for code in codes):
+                # Nothing was written, so there is no rejection to replay: let the caller retry.
+                self.stats["transient"] += 1
+                raise TransientLedgerError(codes) from exc
             return self._replay(posting, request_hash)
         self.stats["rejected"] += 1
         return Result("REJECTED", posting.txn_id, reason)

@@ -208,3 +208,33 @@ def test_transaction_conflict_is_retryable_not_a_rejection(api, ledger, monkeypa
     code, body = deposit(api)
     assert code == 201 and body["status"] == "POSTED"
     assert ledger.balance("CUST#C1:CASH", "INR") == Decimal("10000")
+
+
+def test_transaction_conflict_while_recording_a_rejection_is_retryable(api, ledger, monkeypatch):
+    """A conflict on the rejection write leaves nothing behind, so it is a 503, not a 500."""
+    deposit(api, amount="100")
+    ddb = ledger.aws.ddb
+    real = ddb.transact_write_items
+    error = ddb.exceptions.TransactionCanceledException(
+        {
+            "Error": {"Code": "TransactionCanceledException", "Message": "cancelled"},
+            "CancellationReasons": [{"Code": "TransactionConflict"}, {"Code": "None"}],
+        },
+        "TransactWriteItems",
+    )
+    calls = {"n": 0}
+
+    def conflict_on_rejection(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:  # 1st call: the posting (rejected for cash); 2nd: the rejection write
+            raise error
+        return real(**kwargs)
+
+    monkeypatch.setattr(ddb, "transact_write_items", conflict_on_rejection)
+    code, body = order(api, "BUY", 100, key="o9")  # 10,000 > 100 cash
+    assert code == 503 and body["retryable"] is True
+    # The retry is decided afresh: a rejection, not a replay of something never written.
+    code, body = order(api, "BUY", 100, key="o9")
+    assert code == 422 and "insufficient" in body["reason"]
+    code, body = order(api, "BUY", 100, key="o9")
+    assert code == 200 and body["original_status"] == "REJECTED"
