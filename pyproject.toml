@@ -30,7 +30,7 @@ fbc = "fbc.cli:main"
 
 [project.optional-dependencies]
 # Only needed to compile the dbt project for the Athena target (CI does this offline).
-athena = ["dbt-athena==1.11.1"]
+athena = ["dbt-athena==1.11.2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fbc"]
@@ -40,7 +40,7 @@ dev = [
     "pre-commit>=4",
     "pytest>=9",
     "pytest-cov>=7",
-    "ruff>=0.16,<0.17",
+    "ruff>=0.16,<0.18",
 ]
 
 [tool.uv]
